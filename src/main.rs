@@ -32,7 +32,7 @@ struct Action {
     group: &'static str,
     title: &'static str,
     description: &'static str,
-    /// Letzter Teil der Adresse hinter /bin/com/ajila/forms/industry/leg/
+    /// Pfad hinter dem Host, z. B. "restartFounding" oder "founding/acceptVnb".
     path_suffix: &'static str,
     fields: &'static [Field],
 }
@@ -745,11 +745,7 @@ fn App() -> Element {
                                 RequestBody::Form(form)
                             };
 
-                            let url = format!(
-                                "{}/bin/com/ajila/forms/industry/leg/{}",
-                                current.env.host(),
-                                action.path_suffix
-                            );
+                            let url = format!("{}/{}", current.env.host(), action.path_suffix);
                             let key = current.key().trim().to_string();
 
                             // Nicht sofort senden: erst im Popup bestätigen lassen.
