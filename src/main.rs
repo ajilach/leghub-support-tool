@@ -69,6 +69,8 @@ static ACTIONS: &[Action] = &[
             Field { key: "message", label: "Begründung", hint: "Grund der Ablehnung (wird der Person mitgeteilt)", required: false },
         ],
     },
+    // Vorübergehend deaktiviert: Endpunkt noch nicht erreichbar.
+    /*
     Action {
         group: "Gründungen",
         title: "Gründung anpassen",
@@ -78,6 +80,7 @@ static ACTIONS: &[Action] = &[
             Field { key: "legId", label: "Gründungs-ID", hint: "ID wie im Dashboard aufgelistet", required: true },
         ],
     },
+    */
     Action {
         group: "Teilnahmen",
         title: "Teilnahme neu starten",
@@ -126,6 +129,8 @@ static ACTIONS: &[Action] = &[
             Field { key: "message", label: "Begründung", hint: "Grund der Ablehnung (wird der Person mitgeteilt)", required: false },
         ],
     },
+    // Vorübergehend deaktiviert: Endpunkt noch nicht erreichbar.
+    /*
     Action {
         group: "Teilnahmen",
         title: "Teilnahme anpassen",
@@ -136,6 +141,7 @@ static ACTIONS: &[Action] = &[
             Field { key: "participationId", label: "Teilnahme-ID", hint: "ID wie im Dashboard aufgelistet", required: true },
         ],
     },
+    */
     Action {
         group: "Unterschriften",
         title: "Unterschrift als abgeschlossen markieren",
