@@ -1,0 +1,13 @@
+<svg width="1024" height="1024" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <!-- LEGhub Support-Tool app icon: the LEGhub spark mark on a brand-purple rounded square -->
+  <rect x="0" y="0" width="100" height="100" rx="22" ry="22" fill="#5E2F85"/>
+  <!-- Mark (original mark bbox ~ x[0,40.36] y[0,36.74]); centered & scaled into the canvas.
+       Yellow bars kept yellow; the parallelogram recolored white so it reads on purple. -->
+  <g transform="translate(22.3, 25.3) scale(1.39)">
+    <rect x="22.0431" y="36.7384" width="7.34768" height="36.7384" transform="rotate(180 22.0431 36.7384)" fill="#FFC349"/>
+    <rect x="0.00012207" y="22.0432" width="7.34768" height="22.043" transform="rotate(-90 0.00012207 22.0432)" fill="#FFC349"/>
+    <rect x="6.98926" y="34.9452" width="7.34768" height="19.5069" transform="rotate(-135 6.98926 34.9452)" fill="#FFC349"/>
+    <rect x="1.79199" y="6.98691" width="7.34768" height="19.5096" transform="rotate(-45 1.79199 6.98691)" fill="#FFC349"/>
+    <path d="M31.5436 36.7384H24.1959L33.0132 0H40.3608L31.5436 36.7384Z" fill="#FFFFFF"/>
+  </g>
+</svg>
