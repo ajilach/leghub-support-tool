@@ -13,3 +13,8 @@ icon = [
     "assets/icons/icon.icns",
     "assets/icons/icon.ico",
 ]
+publisher = "ajila AG"
+short_description = "Support-Tool für LEGHub-Aktionen"
+copyright = "Copyright © 2026 ajila AG"
+homepage = "https://www.ajila.com"
+category = "Utility"
