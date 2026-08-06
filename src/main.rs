@@ -889,27 +889,31 @@ fn App() -> Element {
                             }
                         }
 
-                        div { class: "field",
-                            label { "Zugangsschlüssel Test" }
-                            input {
-                                r#type: "password",
-                                autocomplete: "off",
-                                value: "{settings.read().test_key}",
-                                oninput: move |e| {
-                                    settings.write().test_key = e.value();
-                                },
+                        if settings.read().env == Env::Test {
+                            div { class: "field",
+                                label { "Zugangsschlüssel Test" }
+                                input {
+                                    r#type: "password",
+                                    autocomplete: "off",
+                                    value: "{settings.read().test_key}",
+                                    oninput: move |e| {
+                                        settings.write().test_key = e.value();
+                                    },
+                                }
                             }
                         }
 
-                        div { class: "field",
-                            label { "Zugangsschlüssel Produktion" }
-                            input {
-                                r#type: "password",
-                                autocomplete: "off",
-                                value: "{settings.read().prod_key}",
-                                oninput: move |e| {
-                                    settings.write().prod_key = e.value();
-                                },
+                        if settings.read().env == Env::Prod {
+                            div { class: "field",
+                                label { "Zugangsschlüssel Produktion" }
+                                input {
+                                    r#type: "password",
+                                    autocomplete: "off",
+                                    value: "{settings.read().prod_key}",
+                                    oninput: move |e| {
+                                        settings.write().prod_key = e.value();
+                                    },
+                                }
                             }
                         }
 
