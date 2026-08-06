@@ -71,6 +71,13 @@ static ACTIONS: &[Action] = &[
     },
     Action {
         group: "Gründungen",
+        title: "Persistierung der Gründung erneut versuchen",
+        description: "Versucht nur das Speichern der Gründung erneut, das zuvor fehlgeschlagen ist. Der übrige Ablauf wird nicht wiederholt.",
+        path_suffix: "founding/retryVnb",
+        fields: &[Field { key: "id", label: "Gründungs-ID", hint: "ID wie im Dashboard aufgelistet", required: true }],
+    },
+    Action {
+        group: "Gründungen",
         title: "Gründung anpassen",
         description: "Ändert einzelne Angaben einer bestehenden Gründung. Nur die angegebenen Felder werden überschrieben, alles andere bleibt unverändert.",
         path_suffix: "patchFounding",
@@ -108,6 +115,13 @@ static ACTIONS: &[Action] = &[
             Field { key: "id", label: "Teilnahme-ID", hint: "ID wie im Dashboard aufgelistet", required: true },
             Field { key: "message", label: "Begründung", hint: "Grund der Ablehnung (wird der Person mitgeteilt)", required: false },
         ],
+    },
+    Action {
+        group: "Teilnahmen",
+        title: "Persistierung der Teilnahme erneut versuchen",
+        description: "Versucht nur das Speichern der Teilnahme erneut, das zuvor fehlgeschlagen ist. Der übrige Ablauf wird nicht wiederholt.",
+        path_suffix: "participation/retryVnb",
+        fields: &[Field { key: "id", label: "Teilnahme-ID", hint: "ID wie im Dashboard aufgelistet", required: true }],
     },
     Action {
         group: "Teilnahmen",
