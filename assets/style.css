@@ -137,6 +137,10 @@ body {
     max-width: 660px;
 }
 
+.content-wide {
+    max-width: 1040px;
+}
+
 .env-badge {
     display: inline-flex;
     align-items: center;
@@ -176,6 +180,151 @@ h1 {
     font-size: 14.5px;
     line-height: 1.55;
     margin: 0 0 28px;
+}
+
+/* -------- Übersicht / Ablauf -------- */
+.flow-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 30px;
+    margin-top: 4px;
+}
+
+.flow-head {
+    margin-bottom: 14px;
+}
+
+.flow-head h2 {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--ink);
+}
+
+.flow-sub {
+    margin-top: 3px;
+    font-size: 12.5px;
+    color: var(--muted);
+}
+
+.flow-stage {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--muted);
+    border-radius: 12px;
+    padding: 13px 16px 15px;
+}
+
+.flow-stage.kind-draft {
+    border-left-color: #b6bac6;
+}
+
+.flow-stage.kind-approval {
+    border-left-color: var(--yellow);
+}
+
+.flow-stage.kind-signature {
+    border-left-color: var(--purple-accent);
+}
+
+.flow-stage.kind-persist {
+    border-left-color: #5b86c9;
+}
+
+.flow-stage.kind-done {
+    border-left-color: var(--green);
+    background: var(--panel);
+}
+
+.flow-connector {
+    height: 20px;
+    margin-left: 24px;
+    border-left: 2px solid var(--border);
+    position: relative;
+}
+
+.flow-connector::after {
+    content: "";
+    position: absolute;
+    left: -5px;
+    bottom: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid var(--border);
+}
+
+.flow-stage-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    margin-bottom: 6px;
+}
+
+.flow-actor {
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted);
+}
+
+.flow-state {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--purple);
+    background: var(--purple-soft);
+    padding: 3px 9px;
+    border-radius: 999px;
+}
+
+.flow-stage-title {
+    font-size: 14.5px;
+    font-weight: 600;
+    color: var(--ink);
+    line-height: 1.35;
+}
+
+.flow-stuck {
+    margin-top: 7px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--muted);
+}
+
+.flow-skip {
+    margin-top: 5px;
+    font-size: 12px;
+    line-height: 1.45;
+    font-style: italic;
+    color: var(--muted);
+}
+
+.flow-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 13px;
+}
+
+.flow-chip {
+    padding: 7px 14px;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--purple);
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    cursor: pointer;
+    text-align: left;
+    line-height: 1.25;
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.flow-chip:hover {
+    background: var(--purple-soft);
+    border-color: var(--purple-accent);
 }
 
 .field {

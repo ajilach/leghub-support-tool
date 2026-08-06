@@ -11,6 +11,10 @@ use dioxus::desktop::{Config, WindowBuilder};
 use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
+mod flows;
+
+use flows::Overview;
+
 const STYLE: Asset = asset!("/assets/style.css");
 const LOGO: Asset = asset!("/assets/leghub_logo.svg");
 
@@ -503,6 +507,17 @@ fn App() -> Element {
     let mut confirm_checked = use_signal(|| false);
     // Ausgewählte Änderungen für "anpassen"-Aktionen: (Pfad, Wert).
     let mut patch_changes = use_signal(Vec::<(String, String)>::new);
+    // Übersicht mit dem Ablauf-Diagramm ist die Einstiegsseite.
+    let mut show_overview = use_signal(|| true);
+
+    // Wechselt zu einer Aktion und leert die zuvor erfassten Eingaben.
+    let mut select_action = move |i: usize| {
+        selected.set(i);
+        values.write().clear();
+        patch_changes.write().clear();
+        result.set(None);
+        show_overview.set(false);
+    };
 
     let action = &ACTIONS[selected()];
     let patch_fields = patch_fields_for(action.path_suffix);
@@ -517,18 +532,18 @@ fn App() -> Element {
                     div { class: "brand-sub", "Support-Tool" }
                 }
                 div { class: "nav",
+                    button {
+                        class: if show_overview() { "nav-item active" } else { "nav-item" },
+                        onclick: move |_| show_overview.set(true),
+                        "Übersicht"
+                    }
                     for group in GROUPS.iter() {
                         div { class: "nav-group", "{group}" }
                         for (i , a) in ACTIONS.iter().enumerate() {
                             if a.group == *group {
                                 button {
-                                    class: if selected() == i { "nav-item active" } else { "nav-item" },
-                                    onclick: move |_| {
-                                        selected.set(i);
-                                        values.write().clear();
-                                        patch_changes.write().clear();
-                                        result.set(None);
-                                    },
+                                    class: if selected() == i && !show_overview() { "nav-item active" } else { "nav-item" },
+                                    onclick: move |_| select_action(i),
                                     "{a.title}"
                                 }
                             }
@@ -543,314 +558,325 @@ fn App() -> Element {
             }
 
             // -------- Hauptbereich --------
-            main { class: "content",
+            main { class: if show_overview() { "content content-wide" } else { "content" },
                 div { class: "env-badge",
                     "Umgebung: "
                     span { class: if settings.read().env == Env::Prod { "env-prod" } else { "env-test" },
                         "{settings.read().env.label()}"
                     }
                 }
-                h1 { "{action.title}" }
-                p { class: "description", "{action.description}" }
 
-                form { onsubmit: move |e| e.stop_propagation(),
-                    for field in action.fields.iter() {
-                        div { class: "field",
-                            label {
-                                "{field.label}"
-                                if !field.required {
-                                    span { class: "optional", " (optional)" }
+                if show_overview() {
+                    Overview {
+                        on_open: move |path_suffix: &'static str| {
+                            if let Some(i) = ACTIONS.iter().position(|a| a.path_suffix == path_suffix) {
+                                select_action(i);
+                            }
+                        },
+                    }
+                } else {
+                    h1 { "{action.title}" }
+                    p { class: "description", "{action.description}" }
+
+                    form { onsubmit: move |e| e.stop_propagation(),
+                        for field in action.fields.iter() {
+                            div { class: "field",
+                                label {
+                                    "{field.label}"
+                                    if !field.required {
+                                        span { class: "optional", " (optional)" }
+                                    }
+                                }
+                                input {
+                                    r#type: "text",
+                                    autocomplete: "off",
+                                    value: "{values.read().get(field.key).cloned().unwrap_or_default()}",
+                                    oninput: move |e| {
+                                        values.write().insert(field.key.to_string(), e.value());
+                                    },
+                                }
+                                if !field.hint.is_empty() {
+                                    div { class: "hint", "{field.hint}" }
                                 }
                             }
-                            input {
-                                r#type: "text",
-                                autocomplete: "off",
-                                value: "{values.read().get(field.key).cloned().unwrap_or_default()}",
-                                oninput: move |e| {
-                                    values.write().insert(field.key.to_string(), e.value());
-                                },
-                            }
-                            if !field.hint.is_empty() {
-                                div { class: "hint", "{field.hint}" }
-                            }
                         }
-                    }
 
-                    // -------- Feld-Auswahl für "anpassen"-Aktionen --------
-                    if !patch_fields.is_empty() {
-                        div { class: "field",
-                            label { "Zu ändernde Angaben" }
-                            div { class: "hint",
-                                "Wählen Sie unten die Felder aus, die geändert werden sollen."
-                            }
+                        // -------- Feld-Auswahl für "anpassen"-Aktionen --------
+                        if !patch_fields.is_empty() {
+                            div { class: "field",
+                                label { "Zu ändernde Angaben" }
+                                div { class: "hint",
+                                    "Wählen Sie unten die Felder aus, die geändert werden sollen."
+                                }
 
-                            div { class: "patch-list",
-                                for (idx , change) in patch_changes.read().iter().enumerate() {
-                                    if let Some(pf) = find_patch_field(patch_fields, &change.0) {
-                                        div { class: "patch-row",
-                                            div { class: "patch-row-label", "{pf.label}" }
-                                            div { class: "patch-row-value",
-                                                match pf.kind {
-                                                    ValueKind::Bool => rsx! {
-                                                        select {
-                                                            value: "{change.1}",
-                                                            onchange: move |e| {
-                                                                if let Some(c) = patch_changes.write().get_mut(idx) {
-                                                                    c.1 = e.value();
-                                                                }
-                                                            },
-                                                            option { value: "true", "Ja" }
-                                                            option { value: "false", "Nein" }
-                                                        }
-                                                    },
-                                                    ValueKind::Choice(opts) => rsx! {
-                                                        select {
-                                                            value: "{change.1}",
-                                                            onchange: move |e| {
-                                                                if let Some(c) = patch_changes.write().get_mut(idx) {
-                                                                    c.1 = e.value();
-                                                                }
-                                                            },
-                                                            for (v , l) in opts.iter() {
-                                                                option { value: "{v}", "{l}" }
+                                div { class: "patch-list",
+                                    for (idx , change) in patch_changes.read().iter().enumerate() {
+                                        if let Some(pf) = find_patch_field(patch_fields, &change.0) {
+                                            div { class: "patch-row",
+                                                div { class: "patch-row-label", "{pf.label}" }
+                                                div { class: "patch-row-value",
+                                                    match pf.kind {
+                                                        ValueKind::Bool => rsx! {
+                                                            select {
+                                                                value: "{change.1}",
+                                                                onchange: move |e| {
+                                                                    if let Some(c) = patch_changes.write().get_mut(idx) {
+                                                                        c.1 = e.value();
+                                                                    }
+                                                                },
+                                                                option { value: "true", "Ja" }
+                                                                option { value: "false", "Nein" }
                                                             }
-                                                        }
-                                                    },
-                                                    ValueKind::Number => rsx! {
-                                                        input {
-                                                            r#type: "number",
-                                                            value: "{change.1}",
-                                                            oninput: move |e| {
-                                                                if let Some(c) = patch_changes.write().get_mut(idx) {
-                                                                    c.1 = e.value();
+                                                        },
+                                                        ValueKind::Choice(opts) => rsx! {
+                                                            select {
+                                                                value: "{change.1}",
+                                                                onchange: move |e| {
+                                                                    if let Some(c) = patch_changes.write().get_mut(idx) {
+                                                                        c.1 = e.value();
+                                                                    }
+                                                                },
+                                                                for (v , l) in opts.iter() {
+                                                                    option { value: "{v}", "{l}" }
                                                                 }
-                                                            },
-                                                        }
+                                                            }
+                                                        },
+                                                        ValueKind::Number => rsx! {
+                                                            input {
+                                                                r#type: "number",
+                                                                value: "{change.1}",
+                                                                oninput: move |e| {
+                                                                    if let Some(c) = patch_changes.write().get_mut(idx) {
+                                                                        c.1 = e.value();
+                                                                    }
+                                                                },
+                                                            }
+                                                        },
+                                                        ValueKind::Date | ValueKind::LocalDate => rsx! {
+                                                            input {
+                                                                r#type: "date",
+                                                                value: "{change.1}",
+                                                                oninput: move |e| {
+                                                                    if let Some(c) = patch_changes.write().get_mut(idx) {
+                                                                        c.1 = e.value();
+                                                                    }
+                                                                },
+                                                            }
+                                                        },
+                                                        ValueKind::Text => rsx! {
+                                                            input {
+                                                                r#type: "text",
+                                                                autocomplete: "off",
+                                                                value: "{change.1}",
+                                                                oninput: move |e| {
+                                                                    if let Some(c) = patch_changes.write().get_mut(idx) {
+                                                                        c.1 = e.value();
+                                                                    }
+                                                                },
+                                                            }
+                                                        },
+                                                    }
+                                                }
+                                                button {
+                                                    r#type: "button",
+                                                    class: "patch-remove",
+                                                    title: "Entfernen",
+                                                    onclick: move |_| {
+                                                        patch_changes.write().remove(idx);
                                                     },
-                                                    ValueKind::Date | ValueKind::LocalDate => rsx! {
-                                                        input {
-                                                            r#type: "date",
-                                                            value: "{change.1}",
-                                                            oninput: move |e| {
-                                                                if let Some(c) = patch_changes.write().get_mut(idx) {
-                                                                    c.1 = e.value();
-                                                                }
-                                                            },
-                                                        }
-                                                    },
-                                                    ValueKind::Text => rsx! {
-                                                        input {
-                                                            r#type: "text",
-                                                            autocomplete: "off",
-                                                            value: "{change.1}",
-                                                            oninput: move |e| {
-                                                                if let Some(c) = patch_changes.write().get_mut(idx) {
-                                                                    c.1 = e.value();
-                                                                }
-                                                            },
-                                                        }
-                                                    },
+                                                    "✕"
                                                 }
                                             }
-                                            button {
-                                                r#type: "button",
-                                                class: "patch-remove",
-                                                title: "Entfernen",
-                                                onclick: move |_| {
-                                                    patch_changes.write().remove(idx);
-                                                },
-                                                "✕"
+                                        }
+                                    }
+                                }
+
+                                select {
+                                    class: "patch-add",
+                                    value: "",
+                                    onchange: move |e| {
+                                        let path = e.value();
+                                        if path.is_empty() {
+                                            return;
+                                        }
+                                        if let Some(pf) = find_patch_field(patch_fields, &path) {
+                                            let already = patch_changes.read().iter().any(|c| c.0 == path);
+                                            if !already {
+                                                patch_changes.write().push((path.clone(), default_value_for(pf.kind)));
                                             }
+                                        }
+                                    },
+                                    option { value: "", "＋ Feld hinzufügen …" }
+                                    for pf in patch_fields.iter() {
+                                        if !patch_changes.read().iter().any(|c| c.0 == pf.path) {
+                                            option { value: "{pf.path}", "{pf.label}" }
                                         }
                                     }
                                 }
                             }
+                        }
 
-                            select {
-                                class: "patch-add",
-                                value: "",
-                                onchange: move |e| {
-                                    let path = e.value();
-                                    if path.is_empty() {
+                        button {
+                            r#type: "button",
+                            class: "run-btn",
+                            disabled: sending(),
+                            onclick: move |_| {
+                                let action = &ACTIONS[selected()];
+                                let current = settings.read().clone();
+
+                                // Zugangsschlüssel für die gewählte Umgebung vorhanden?
+                                if current.key().trim().is_empty() {
+                                    result
+                                        .set(
+                                            Some(ActionResult {
+                                                kind: ResultKind::Error,
+                                                message: format!(
+                                                    "Für die Umgebung \"{}\" ist kein Zugangsschlüssel hinterlegt. Bitte in den Einstellungen eintragen.",
+                                                    current.env.label(),
+                                                ),
+                                            }),
+                                        );
+                                    show_settings.set(true);
+                                    return;
+                                }
+                                let is_patch = !patch_fields.is_empty();
+                                let vals = values.read();
+                                let mut query: Vec<(String, String)> = Vec::new();
+                                let mut form: Vec<(String, String)> = Vec::new();
+                                for f in action.fields.iter() {
+                                    let v = vals.get(f.key).map(|s| s.trim().to_string()).unwrap_or_default();
+                                    if f.required && v.is_empty() {
+                                        result
+                                            .set(
+                                                Some(ActionResult {
+                                                    kind: ResultKind::Error,
+                                                    message: "Bitte alle Pflichtfelder ausfüllen.".into(),
+                                                }),
+                                            );
                                         return;
                                     }
-                                    if let Some(pf) = find_patch_field(patch_fields, &path) {
-                                        let already = patch_changes.read().iter().any(|c| c.0 == path);
-                                        if !already {
-                                            patch_changes.write().push((path.clone(), default_value_for(pf.kind)));
-                                        }
+                                    if v.is_empty() {
+                                        continue;
                                     }
-                                },
-                                option { value: "", "＋ Feld hinzufügen …" }
-                                for pf in patch_fields.iter() {
-                                    if !patch_changes.read().iter().any(|c| c.0 == pf.path) {
-                                        option { value: "{pf.path}", "{pf.label}" }
+                                    if is_patch {
+                                        query.push((f.key.to_string(), v));
+                                    } else {
+                                        form.push((f.key.to_string(), v));
                                     }
                                 }
-                            }
-                        }
-                    }
+                                drop(vals);
+                                let body = if is_patch {
+                                    let changes = patch_changes.read();
+                                    if changes.is_empty() {
+                                        result
+                                            .set(
+                                                Some(ActionResult {
+                                                    kind: ResultKind::Error,
+                                                    message: "Bitte mindestens ein zu änderndes Feld auswählen."
+                                                        .into(),
+                                                }),
 
-                    button {
-                        r#type: "button",
-                        class: "run-btn",
-                        disabled: sending(),
-                        onclick: move |_| {
-                            let action = &ACTIONS[selected()];
-                            let current = settings.read().clone();
-
-                            // Zugangsschlüssel für die gewählte Umgebung vorhanden?
-                            if current.key().trim().is_empty() {
-                                result
+                                            );
+                                        return;
+                                    }
+                                    let mut root = serde_json::Map::new();
+                                    for (path, raw) in changes.iter() {
+                                        let Some(pf) = find_patch_field(patch_fields, path) else { continue };
+                                        let value = raw.trim();
+                                        let json_value = match pf.kind {
+                                            ValueKind::Bool => serde_json::Value::Bool(value == "true"),
+                                            ValueKind::Number => {
+                                                let normalized = value.replace(',', ".");
+                                                if let Ok(i) = normalized.parse::<i64>() {
+                                                    serde_json::json!(i)
+                                                } else if let Ok(n) = normalized.parse::<f64>() {
+                                                    serde_json::json!(n)
+                                                } else {
+                                                    result
+                                                        .set(
+                                                            Some(ActionResult {
+                                                                kind: ResultKind::Error,
+                                                                message: format!(
+                                                                    "Bei \"{}\" bitte eine gültige Zahl eingeben.",
+                                                                    pf.label,
+                                                                ),
+                                                            }),
+                                                        );
+                                                    return;
+                                                }
+                                            }
+                                            ValueKind::Date => {
+                                                if value.is_empty() {
+                                                    result
+                                                        .set(
+                                                            Some(ActionResult {
+                                                                kind: ResultKind::Error,
+                                                                message: format!(
+                                                                    "Bei \"{}\" bitte ein Datum wählen.",
+                                                                    pf.label,
+                                                                ),
+                                                            }),
+                                                        );
+                                                    return;
+                                                }
+                                                serde_json::Value::String(format!("{value}T00:00:00Z"))
+                                            }
+                                            _ => {
+                                                if value.is_empty() {
+                                                    result
+                                                        .set(
+                                                            Some(ActionResult {
+                                                                kind: ResultKind::Error,
+                                                                message: format!(
+                                                                    "Bei \"{}\" bitte einen Wert angeben.",
+                                                                    pf.label,
+                                                                ),
+                                                            }),
+                                                        );
+                                                    return;
+                                                }
+                                                serde_json::Value::String(value.to_string())
+                                            }
+                                        };
+                                        insert_nested(&mut root, path, json_value);
+                                    }
+                                    drop(changes);
+                                    RequestBody::Json(serde_json::Value::Object(root).to_string())
+                                } else {
+                                    RequestBody::Form(form)
+                                };
+                                let url = format!("{}/{}", current.env.host(), action.path_suffix);
+                                let key = current.key().trim().to_string();
+                                result.set(None);
+                                confirm_checked.set(false);
+                                pending
                                     .set(
-                                        Some(ActionResult {
-                                            kind: ResultKind::Error,
-                                            message: format!(
-                                                "Für die Umgebung \"{}\" ist kein Zugangsschlüssel hinterlegt. Bitte in den Einstellungen eintragen.",
-                                                current.env.label(),
-                                            ),
+                                        Some(PendingRequest {
+                                            url,
+                                            key,
+                                            query,
+                                            body,
+                                            action_title: action.title.to_string(),
+                                            env: current.env,
                                         }),
                                     );
-                                show_settings.set(true);
-                                return;
-                            }
-                            let is_patch = !patch_fields.is_empty();
-                            let vals = values.read();
-                            let mut query: Vec<(String, String)> = Vec::new();
-                            let mut form: Vec<(String, String)> = Vec::new();
-                            for f in action.fields.iter() {
-                                let v = vals.get(f.key).map(|s| s.trim().to_string()).unwrap_or_default();
-                                if f.required && v.is_empty() {
-                                    result
-                                        .set(
-                                            Some(ActionResult {
-                                                kind: ResultKind::Error,
-                                                message: "Bitte alle Pflichtfelder ausfüllen.".into(),
-                                            }),
-                                        );
-                                    return;
-                                }
-                                if v.is_empty() {
-                                    continue;
-                                }
-                                if is_patch {
-                                    query.push((f.key.to_string(), v));
-                                } else {
-                                    form.push((f.key.to_string(), v));
-                                }
-                            }
-                            drop(vals);
-                            let body = if is_patch {
-                                let changes = patch_changes.read();
-                                if changes.is_empty() {
-                                    result
-                                        .set(
-                                            Some(ActionResult {
-                                                kind: ResultKind::Error,
-                                                message: "Bitte mindestens ein zu änderndes Feld auswählen."
-                                                    .into(),
-                                            }),
-
-                                        );
-                                    return;
-                                }
-                                let mut root = serde_json::Map::new();
-                                for (path, raw) in changes.iter() {
-                                    let Some(pf) = find_patch_field(patch_fields, path) else { continue };
-                                    let value = raw.trim();
-                                    let json_value = match pf.kind {
-                                        ValueKind::Bool => serde_json::Value::Bool(value == "true"),
-                                        ValueKind::Number => {
-                                            let normalized = value.replace(',', ".");
-                                            if let Ok(i) = normalized.parse::<i64>() {
-                                                serde_json::json!(i)
-                                            } else if let Ok(n) = normalized.parse::<f64>() {
-                                                serde_json::json!(n)
-                                            } else {
-                                                result
-                                                    .set(
-                                                        Some(ActionResult {
-                                                            kind: ResultKind::Error,
-                                                            message: format!(
-                                                                "Bei \"{}\" bitte eine gültige Zahl eingeben.",
-                                                                pf.label,
-                                                            ),
-                                                        }),
-                                                    );
-                                                return;
-                                            }
-                                        }
-                                        ValueKind::Date => {
-                                            if value.is_empty() {
-                                                result
-                                                    .set(
-                                                        Some(ActionResult {
-                                                            kind: ResultKind::Error,
-                                                            message: format!(
-                                                                "Bei \"{}\" bitte ein Datum wählen.",
-                                                                pf.label,
-                                                            ),
-                                                        }),
-                                                    );
-                                                return;
-                                            }
-                                            serde_json::Value::String(format!("{value}T00:00:00Z"))
-                                        }
-                                        _ => {
-                                            if value.is_empty() {
-                                                result
-                                                    .set(
-                                                        Some(ActionResult {
-                                                            kind: ResultKind::Error,
-                                                            message: format!(
-                                                                "Bei \"{}\" bitte einen Wert angeben.",
-                                                                pf.label,
-                                                            ),
-                                                        }),
-                                                    );
-                                                return;
-                                            }
-                                            serde_json::Value::String(value.to_string())
-                                        }
-                                    };
-                                    insert_nested(&mut root, path, json_value);
-                                }
-                                drop(changes);
-                                RequestBody::Json(serde_json::Value::Object(root).to_string())
+                            },
+                            if sending() {
+                                "Wird ausgeführt …"
                             } else {
-                                RequestBody::Form(form)
-                            };
-                            let url = format!("{}/{}", current.env.host(), action.path_suffix);
-                            let key = current.key().trim().to_string();
-                            result.set(None);
-                            confirm_checked.set(false);
-                            pending
-                                .set(
-                                    Some(PendingRequest {
-                                        url,
-                                        key,
-                                        query,
-                                        body,
-                                        action_title: action.title.to_string(),
-                                        env: current.env,
-                                    }),
-                                );
-                        },
-                        if sending() {
-                            "Wird ausgeführt …"
-                        } else {
-                            "Ausführen"
+                                "Ausführen"
+                            }
                         }
                     }
-                }
 
-                if let Some(res) = result() {
-                    div {
-                        class: match res.kind {
-                            ResultKind::Success => "result result-ok",
-                            ResultKind::Error => "result result-err",
-                        },
-                        "{res.message}"
+                    if let Some(res) = result() {
+                        div {
+                            class: match res.kind {
+                                ResultKind::Success => "result result-ok",
+                                ResultKind::Error => "result result-err",
+                            },
+                            "{res.message}"
+                        }
                     }
                 }
             }
