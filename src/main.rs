@@ -36,7 +36,7 @@ struct Action {
     group: &'static str,
     title: &'static str,
     description: &'static str,
-    /// Pfad hinter dem Host, z. B. "restartFounding" oder "founding/acceptVnb".
+    /// Letzter Teil der Adresse hinter /bin/com/ajila/forms/industry/leg/
     path_suffix: &'static str,
     fields: &'static [Field],
 }
@@ -845,7 +845,11 @@ fn App() -> Element {
                                 } else {
                                     RequestBody::Form(form)
                                 };
-                                let url = format!("{}/{}", current.env.host(), action.path_suffix);
+                                let url = format!(
+                                    "{}/bin/com/ajila/forms/industry/leg/{}",
+                                    current.env.host(),
+                                    action.path_suffix
+                                );
                                 let key = current.key().trim().to_string();
                                 result.set(None);
                                 confirm_checked.set(false);
