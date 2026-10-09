@@ -18,6 +18,10 @@
     --ok-text: #2f6b45;
     --err-bg: #fdecec;
     --err-text: #a11b1b;
+    --warn-bg: #fff6e0;
+    --warn-text: #8a5a00;
+    --danger: #c0271f;
+    --danger-dark: #9e1f19;
 }
 
 * {
@@ -344,7 +348,8 @@ h1 {
     color: var(--muted);
 }
 
-.field input {
+.field input,
+.field textarea {
     width: 100%;
     padding: 11px 14px;
     font-size: 14px;
@@ -355,7 +360,8 @@ h1 {
     transition: border-color 0.12s ease, box-shadow 0.12s ease;
 }
 
-.field input::placeholder {
+.field input::placeholder,
+.field textarea::placeholder {
     color: #b6bac6;
 }
 
@@ -450,7 +456,13 @@ h1 {
     box-shadow: 0 0 0 3px rgba(157, 78, 221, 0.18);
 }
 
-.field input:focus {
+.field textarea {
+    font-family: inherit;
+    resize: vertical;
+}
+
+.field input:focus,
+.field textarea:focus {
     outline: none;
     border-color: var(--purple-accent);
     box-shadow: 0 0 0 3px rgba(157, 78, 221, 0.18);
@@ -491,6 +503,7 @@ h1 {
     font-size: 14px;
     line-height: 1.45;
     border: 1px solid transparent;
+    white-space: pre-line;
 }
 
 .result-ok {
@@ -503,6 +516,176 @@ h1 {
     background: var(--err-bg);
     color: var(--err-text);
     border-color: #f4cccc;
+}
+
+.result-warn {
+    background: var(--warn-bg);
+    color: var(--warn-text);
+    border-color: #f3dca3;
+}
+
+/* -------- Lösch-Aktionen -------- */
+.env-badge .env-override {
+    color: var(--warn-text);
+    background: var(--warn-bg);
+}
+
+.guide {
+    margin: -8px 0 26px;
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--text);
+}
+
+.guide-warn {
+    padding: 11px 14px;
+    margin-bottom: 14px;
+    background: var(--warn-bg);
+    color: var(--warn-text);
+    border: 1px solid #f3dca3;
+    border-radius: 10px;
+}
+
+.guide-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.guide-section {
+    padding: 12px 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+}
+
+.guide-section h3 {
+    margin: 0 0 6px;
+    font-size: 13px;
+    color: var(--ink);
+}
+
+.guide-section p {
+    margin: 0 0 8px;
+}
+
+.guide-section ul,
+.guide-section ol,
+.guide-notes {
+    margin: 0;
+    padding-left: 18px;
+}
+
+.guide-section li + li,
+.guide-notes li + li {
+    margin-top: 3px;
+}
+
+.guide-force {
+    margin-bottom: 12px;
+    border-color: #f3dca3;
+}
+
+.guide-force ul {
+    margin-bottom: 8px;
+}
+
+.guide-notes {
+    color: var(--muted);
+    font-size: 12.5px;
+    margin-bottom: 10px;
+}
+
+.force-check {
+    margin: 4px 0 18px;
+    padding: 12px 14px;
+    background: var(--warn-bg);
+    border: 1px solid #f3dca3;
+    border-radius: 10px;
+}
+
+.result-dry {
+    background: var(--panel);
+    color: var(--text);
+    border-color: var(--border);
+}
+
+.summary {
+    white-space: normal;
+}
+
+.summary-title {
+    font-weight: 700;
+    color: var(--ink);
+    margin-bottom: 4px;
+}
+
+.result-ok .summary-title {
+    color: var(--ok-text);
+}
+
+.summary-meta {
+    font-size: 12.5px;
+    color: var(--muted);
+    margin-bottom: 8px;
+}
+
+.summary ul {
+    margin: 0;
+    padding-left: 18px;
+}
+
+.summary-sub {
+    margin-top: 10px;
+    font-size: 13px;
+}
+
+.summary-note {
+    margin: 12px 0 0;
+    font-size: 13px;
+    white-space: normal;
+}
+
+.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px;
+}
+
+.danger-btn {
+    margin-top: 14px;
+    padding: 13px 26px;
+    font-size: 14.5px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--danger);
+    border: none;
+    border-radius: 999px;
+    cursor: pointer;
+    box-shadow: 0 6px 16px rgba(192, 39, 31, 0.28);
+    transition: background 0.12s ease, transform 0.06s ease;
+}
+
+.danger-btn:hover {
+    background: var(--danger-dark);
+}
+
+.danger-btn:active {
+    transform: translateY(1px);
+}
+
+.danger-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+    box-shadow: none;
+}
+
+.confirm-actions .danger-btn {
+    margin-top: 0;
+}
+
+.result .cancel-btn {
+    margin-top: 12px;
 }
 
 /* -------- Einstellungen (Overlay) -------- */

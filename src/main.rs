@@ -161,10 +161,278 @@ static ACTIONS: &[Action] = &[
         path_suffix: "signatureProcessCompleted",
         fields: &[Field { key: "documentId", label: "Dokument-ID", hint: "ID wie im SC Sign Mail angezeigt", required: true }],
     },
+    Action {
+        group: "Löschen",
+        title: "LEG löschen",
+        description: "Löscht eine LEG samt allen Teilnahmen, Messpunkten und Verträgen. Zuerst wird immer ein Probelauf gemacht, der zeigt, was gelöscht würde.",
+        path_suffix: "deleteLeg",
+        fields: &[
+            Field { key: "legId", label: "Gründungs-ID", hint: "Interne LEG-ID wie im Dashboard (im Link «leg-detail?legId=…»)", required: true },
+            Field { key: "ticket", label: "Ticket", hint: "Support-Ticket, dem die Löschung zugeordnet wird, z. B. LHSD-1091", required: true },
+            Field { key: "reason", label: "Begründung", hint: "Kurzer Grund fürs Audit, z. B. «Duplikat» oder «Test-LEG». Keine Personendaten (Namen, E-Mail) – der Text landet in Server-Logs.", required: false },
+        ],
+    },
+    Action {
+        group: "Löschen",
+        title: "Teilnahme löschen",
+        description: "Löscht eine ganze Teilnahme samt Messpunkten und Verträgen. Messpunkte, die noch zu einer anderen Teilnahme gehören, bleiben bestehen – nur die Verknüpfung wird entfernt. Zuerst wird immer ein Probelauf gemacht.",
+        path_suffix: "deleteParticipation",
+        fields: &[
+            Field { key: "legId", label: "Gründungs-ID", hint: "ID der zugehörigen Gründung", required: true },
+            Field { key: "participantId", label: "Teilnehmer-ID", hint: "Teilnehmer-ID, wie sie im Ticket bzw. Dashboard steht", required: true },
+            Field { key: "ticket", label: "Ticket", hint: "Support-Ticket, dem die Löschung zugeordnet wird, z. B. LHSD-1091", required: true },
+            Field { key: "reason", label: "Begründung", hint: "Kurzer Grund fürs Audit, z. B. «Duplikat» oder «Test-LEG». Keine Personendaten (Namen, E-Mail) – der Text landet in Server-Logs.", required: false },
+        ],
+    },
+    Action {
+        group: "Löschen",
+        title: "Messpunkte löschen",
+        description: "Löscht nur die angegebenen Messpunkte einer Teilnahme. Die Teilnahme selbst bleibt bestehen. Zuerst wird immer ein Probelauf gemacht.",
+        path_suffix: "deleteParticipation",
+        fields: &[
+            Field { key: "legId", label: "Gründungs-ID", hint: "ID der zugehörigen Gründung", required: true },
+            Field { key: "participantId", label: "Teilnehmer-ID", hint: "Teilnehmer-ID, wie sie im Ticket bzw. Dashboard steht", required: true },
+            Field { key: "measuringPointNumber", label: "Messpunkte", hint: "Nur diese Messpunkte der Teilnahme werden gelöscht. Mehrere Nummern durch Komma oder Zeilenumbruch trennen, z. B. «CH1015001234500010060400007001001, CH1015001234500010060400007001002». Gross-/Kleinschreibung spielt keine Rolle.", required: true },
+            Field { key: "ticket", label: "Ticket", hint: "Support-Ticket, dem die Löschung zugeordnet wird, z. B. LHSD-1091", required: true },
+            Field { key: "reason", label: "Begründung", hint: "Kurzer Grund fürs Audit, z. B. «Duplikat» oder «Test-LEG». Keine Personendaten (Namen, E-Mail) – der Text landet in Server-Logs.", required: false },
+        ],
+    },
 ];
 
 /// Reihenfolge der Gruppen im Seitenpanel.
-static GROUPS: &[&str] = &["Gründungen", "Teilnahmen", "Unterschriften"];
+static GROUPS: &[&str] = &["Gründungen", "Teilnahmen", "Unterschriften", "Löschen"];
+
+// ----------------------------------------------------------------------------
+// Lösch-Aktionen (immer zuerst als Probelauf)
+// ----------------------------------------------------------------------------
+
+/// Lösch-Aktionen laufen zuerst als Probelauf und werden erst danach wirklich ausgeführt.
+fn is_delete_action(path_suffix: &str) -> bool {
+    matches!(path_suffix, "deleteLeg" | "deleteParticipation")
+}
+
+/// Felder, in die mehrere Werte eingetragen werden können (je Wert ein eigener Parameter).
+fn is_multi_value(key: &str) -> bool {
+    key == "measuringPointNumber"
+}
+
+/// Teilt eine Eingabe mit mehreren Werten an Komma, Semikolon, Leerzeichen und Zeilenumbruch auf.
+fn split_multi_value(raw: &str) -> Vec<String> {
+    raw.split(|c: char| c == ',' || c == ';' || c.is_whitespace())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// Ticket-Nummer im Format `^[A-Z][A-Z0-9]*-\d+$`, z. B. LHSD-1091.
+fn is_valid_ticket(ticket: &str) -> bool {
+    let Some((project, number)) = ticket.split_once('-') else { return false };
+    let mut chars = project.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_uppercase())
+        && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        && !number.is_empty()
+        && number.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Ausführliche Erklärung einer Lösch-Aktion (Quelle: Confluence «Support-Endpoints: LEG,
+/// Teilnahme und Messpunkte löschen»). Löschen ist heikler als die übrigen Aktionen, daher
+/// mehr Text als dort.
+struct DeleteGuide {
+    /// Typische Fälle, für die diese Aktion gedacht ist.
+    when: &'static [&'static str],
+    deletes: &'static [&'static str],
+    keeps: &'static [&'static str],
+    /// Zusätzliche Hinweise (leer = keine).
+    notes: &'static [&'static str],
+    /// Wann «Schutz übersteuern» nötig und richtig ist.
+    force_when: &'static [&'static str],
+    /// Was auch mit «Schutz übersteuern» nicht geht.
+    force_never: &'static str,
+}
+
+const FORCE_NEVER_OTHER_LEG: &str =
+    "Gehört ein Messpunkt auch zu einer anderen LEG, ist das Löschen auch mit «Schutz übersteuern» nicht möglich und muss manuell mit der Entwicklung geklärt werden.";
+
+static GUIDE_LEG: DeleteGuide = DeleteGuide {
+    when: &[
+        "Test- oder Vorführ-LEGs",
+        "Duplikate oder falsch erfasste LEGs",
+        "Abgebrochene oder vom Netzbetreiber abgelehnte Gründungen",
+    ],
+    deletes: &[
+        "die LEG mit Energiemodell und Preismodellen",
+        "alle Teilnahmen und Messpunkte der LEG",
+        "Verträge, die nur an dieser LEG hängen",
+    ],
+    keeps: &[
+        "Benutzer (auch der Gründer), Adressen und Netzadressen",
+        "Verträge, die auch zu einer anderen LEG gehören – nur deren Verknüpfung zu dieser LEG wird entfernt",
+    ],
+    notes: &["Alles geschieht in einem Schritt: schlägt etwas fehl, wird nichts gelöscht."],
+    force_when: &[
+        "die LEG hat den Status «Wartet auf Produzent», «Wartet auf Verbraucher», «Aktiv» oder «Beendet», ist also vom Netzbetreiber akzeptiert,",
+        "die LEG hat bereits eine externe ID vom Netzbetreiber,",
+        "die LEG ist aufgelöst (Enddatum gesetzt) oder",
+        "eine Teilnahme ist «Aktiv» oder «Beendet».",
+    ],
+    force_never: "Gehört ein Messpunkt oder ein Vertrag auch zu einer anderen LEG, ist das Löschen auch mit «Schutz übersteuern» nicht möglich und muss manuell mit der Entwicklung geklärt werden.",
+};
+
+static GUIDE_PARTICIPATION: DeleteGuide = DeleteGuide {
+    when: &[
+        "Hängender oder falsch erfasster Beitritt – der Kunde soll sich neu anmelden",
+        "Beitritt stornieren",
+    ],
+    deletes: &[
+        "alle Messpunkte dieser Teilnahme in dieser LEG samt den Teilnahme-Einträgen",
+        "Verträge, die nur an dieser LEG hängen – sofern der Unterzeichner danach keinen Messpunkt mehr in der LEG hat",
+    ],
+    keeps: &[
+        "die LEG, die Benutzer und die Teilnahmen anderer Teilnehmer",
+        "dieselbe Teilnehmer-ID in einer anderen LEG",
+        "Messpunkte, an denen noch eine andere Teilnahme derselben LEG hängt – nur die Verknüpfung dieser Teilnahme wird entfernt",
+    ],
+    notes: &[
+        "Danach kann sich der Kunde mit demselben Messpunkt neu anmelden. Bei privaten LEGs muss die Vertretung den Beitrittslink aus der Gründungsbestätigung erneut teilen.",
+    ],
+    force_when: &[
+        "ein Messpunkt gehört dem Gründer der LEG – dann ist meist «LEG löschen» der richtige Weg, oder",
+        "ein Messpunkt ist «Aktiv» oder «Beendet», der Netzbetreiber kennt ihn also bereits.",
+    ],
+    force_never: FORCE_NEVER_OTHER_LEG,
+};
+
+static GUIDE_MEASURING_POINTS: DeleteGuide = DeleteGuide {
+    when: &["Einzelne, falsch erfasste Messpunkte eines Teilnehmers (meist zusammen mit «Schutz übersteuern»)"],
+    deletes: &[
+        "nur die angegebenen Messpunkte dieser Teilnahme – hat ein Prosumer dieselbe Nummer für Bezug und Einspeisung, werden beide gelöscht",
+        "Verträge, die nur an dieser LEG hängen – sofern der Unterzeichner danach keinen Messpunkt mehr in der LEG hat",
+    ],
+    keeps: &[
+        "die Teilnahme mit ihren übrigen Messpunkten",
+        "die LEG, die Benutzer und die Teilnahmen anderer Teilnehmer",
+    ],
+    notes: &[
+        "Gehört eine angegebene Nummer nicht zu dieser Teilnahme, wird gar nichts gelöscht.",
+        "Werden alle Messpunkte der Teilnahme angegeben, ist das dasselbe wie «Teilnahme löschen».",
+        "Die Schutzregeln prüfen nur die angegebenen Messpunkte.",
+    ],
+    force_when: &[
+        "ein angegebener Messpunkt gehört dem Gründer der LEG oder",
+        "ein angegebener Messpunkt ist «Aktiv» oder «Beendet», der Netzbetreiber kennt ihn also bereits.",
+    ],
+    force_never: FORCE_NEVER_OTHER_LEG,
+};
+
+/// Erklärung zur Lösch-Aktion mit diesem Titel (zwei Aktionen teilen sich `deleteParticipation`).
+fn delete_guide(action: &Action) -> Option<&'static DeleteGuide> {
+    match (action.path_suffix, action.title) {
+        ("deleteLeg", _) => Some(&GUIDE_LEG),
+        ("deleteParticipation", "Messpunkte löschen") => Some(&GUIDE_MEASURING_POINTS),
+        ("deleteParticipation", _) => Some(&GUIDE_PARTICIPATION),
+        _ => None,
+    }
+}
+
+/// Zusammenfassung, die der Server bei einer Löschung (oder einem Probelauf) liefert.
+#[derive(Clone, PartialEq, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeletionSummary {
+    /// Bewusst ohne Default: fehlt die Angabe, gilt die Antwort als unlesbar.
+    dry_run: bool,
+    #[serde(default)]
+    forced: bool,
+    #[serde(default)]
+    ticket: String,
+    #[serde(default)]
+    leg_internal_id: String,
+    #[serde(default)]
+    leg_name: Option<String>,
+    #[serde(default)]
+    leg_deleted: bool,
+    #[serde(default)]
+    participant_ids: Vec<String>,
+    #[serde(default)]
+    measuring_point_numbers: Vec<String>,
+    #[serde(default)]
+    detached_measuring_point_numbers: Vec<String>,
+    #[serde(default)]
+    measuring_points: u64,
+    #[serde(default)]
+    contracts: u64,
+}
+
+impl DeletionSummary {
+    /// LEG-Name mit ID, oder nur die ID, falls kein Name bekannt ist.
+    fn leg_label(&self) -> String {
+        match self.leg_name.as_deref().map(str::trim) {
+            Some(name) if !name.is_empty() => format!("«{name}» ({})", self.leg_internal_id),
+            _ => self.leg_internal_id.clone(),
+        }
+    }
+
+    /// Einzeilige Kurzfassung, z. B. für das Bestätigungs-Popup.
+    fn short(&self) -> String {
+        let mut parts = Vec::new();
+        if self.leg_deleted {
+            parts.push(format!("LEG {}", self.leg_label()));
+        }
+        if !self.participant_ids.is_empty() {
+            parts.push(format!("{} Teilnahme(n)", self.participant_ids.len()));
+        }
+        parts.push(format!("{} Messpunkt(e)", self.measuring_points));
+        parts.push(format!("{} Vertrag/Verträge", self.contracts));
+        parts.join(", ")
+    }
+
+    /// Klartext zum Kopieren ins Ticket.
+    fn to_ticket_text(&self, env: Env) -> String {
+        let mut lines = vec![
+            format!("LEGhub Support-Tool: Löschung ausgeführt ({})", env.label()),
+            format!("Ticket: {}", self.ticket),
+            format!("LEG: {}", self.leg_label()),
+            format!("LEG gelöscht: {}", if self.leg_deleted { "ja" } else { "nein" }),
+        ];
+        if !self.participant_ids.is_empty() {
+            lines.push(format!("Teilnahmen: {}", self.participant_ids.join(", ")));
+        }
+        lines.push(format!("Messpunkte ({}): {}", self.measuring_points, self.measuring_point_numbers.join(", ")));
+        lines.push(format!("Verträge: {}", self.contracts));
+        if !self.detached_measuring_point_numbers.is_empty() {
+            lines.push(format!(
+                "Nur Verknüpfung entfernt (Messpunkte bleiben bestehen): {}",
+                self.detached_measuring_point_numbers.join(", ")
+            ));
+        }
+        if self.forced {
+            lines.push("Schutz übersteuert (force): ja".into());
+        }
+        lines.join("\n")
+    }
+}
+
+/// Fehlerantwort des Servers (ProblemDetail von Storage oder `{status, detail}` von leg).
+#[derive(Deserialize)]
+struct ProblemBody {
+    detail: Option<String>,
+}
+
+/// Ergebnis eines Lösch-Aufrufs.
+enum DeleteOutcome {
+    Summary(DeletionSummary),
+    Failed {
+        result: ActionResult,
+        /// Eine Schutzregel greift, die sich mit «Schutz übersteuern» umgehen lässt.
+        can_force: bool,
+    },
+}
+
+/// Erfolgreicher Probelauf: genau dieser Request darf danach wirklich ausgeführt werden.
+#[derive(Clone, PartialEq)]
+struct DryRun {
+    request: PendingRequest,
+    summary: DeletionSummary,
+}
 
 // ----------------------------------------------------------------------------
 // Änderbare Felder für die "anpassen"-Aktionen (Feld-Auswahl statt JSON)
@@ -387,6 +655,22 @@ impl Env {
             Env::Prod => "Produktion",
         }
     }
+    /// Adresse des Servers; in Debug-Builds per `LEGHUB_SUPPORT_HOST` überschreibbar.
+    fn base_url(self) -> String {
+        host_override().unwrap_or_else(|| self.host().to_string())
+    }
+}
+
+/// Nur für lokale Tests: `LEGHUB_SUPPORT_HOST=http://localhost:4502 dx serve`.
+/// In Release-Builds immer `None`.
+fn host_override() -> Option<String> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    std::env::var("LEGHUB_SUPPORT_HOST")
+        .ok()
+        .map(|h| h.trim().trim_end_matches('/').to_string())
+        .filter(|h| !h.is_empty())
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
@@ -446,6 +730,8 @@ fn save_settings(settings: &Settings) {
 #[derive(Clone, PartialEq)]
 enum ResultKind {
     Success,
+    /// Weder klar erfolgreich noch fehlgeschlagen (z. B. Zeitüberschreitung beim Löschen).
+    Warning,
     Error,
 }
 
@@ -471,6 +757,8 @@ struct PendingRequest {
     body: RequestBody,
     action_title: String,
     env: Env,
+    /// Bei einer echten Löschung: die Zusammenfassung aus dem vorangegangenen Probelauf.
+    deletion: Option<DeletionSummary>,
 }
 
 // ----------------------------------------------------------------------------
@@ -509,6 +797,13 @@ fn App() -> Element {
     let mut patch_changes = use_signal(Vec::<(String, String)>::new);
     // Übersicht mit dem Ablauf-Diagramm ist die Einstiegsseite.
     let mut show_overview = use_signal(|| true);
+    // Lösch-Aktionen: letzter erfolgreicher Probelauf (nur dann darf wirklich gelöscht werden),
+    // Ergebnis der echten Löschung samt Umgebung und die Option «Schutz übersteuern».
+    let mut dry_run = use_signal(|| Option::<DryRun>::None);
+    let mut deleted = use_signal(|| Option::<(DeletionSummary, Env)>::None);
+    let mut force = use_signal(|| false);
+    let mut offer_force = use_signal(|| false);
+    let mut copied = use_signal(|| false);
 
     // Wechselt zu einer Aktion und leert die zuvor erfassten Eingaben.
     let mut select_action = move |i: usize| {
@@ -516,11 +811,16 @@ fn App() -> Element {
         values.write().clear();
         patch_changes.write().clear();
         result.set(None);
+        dry_run.set(None);
+        deleted.set(None);
+        force.set(false);
+        offer_force.set(false);
         show_overview.set(false);
     };
 
     let action = &ACTIONS[selected()];
     let patch_fields = patch_fields_for(action.path_suffix);
+    let is_delete = is_delete_action(action.path_suffix);
 
     rsx! {
         document::Stylesheet { href: STYLE }
@@ -564,6 +864,9 @@ fn App() -> Element {
                     span { class: if settings.read().env == Env::Prod { "env-prod" } else { "env-test" },
                         "{settings.read().env.label()}"
                     }
+                    if let Some(host) = host_override() {
+                        span { class: "env-override", "Host überschrieben: {host}" }
+                    }
                 }
 
                 if show_overview() {
@@ -577,6 +880,9 @@ fn App() -> Element {
                 } else {
                     h1 { "{action.title}" }
                     p { class: "description", "{action.description}" }
+                    if let Some(guide) = delete_guide(action) {
+                        {delete_guide_view(guide)}
+                    }
 
                     form { onsubmit: move |e| e.stop_propagation(),
                         for field in action.fields.iter() {
@@ -587,13 +893,30 @@ fn App() -> Element {
                                         span { class: "optional", " (optional)" }
                                     }
                                 }
-                                input {
-                                    r#type: "text",
-                                    autocomplete: "off",
-                                    value: "{values.read().get(field.key).cloned().unwrap_or_default()}",
-                                    oninput: move |e| {
-                                        values.write().insert(field.key.to_string(), e.value());
-                                    },
+                                if is_multi_value(field.key) {
+                                    textarea {
+                                        rows: "3",
+                                        placeholder: "CH1015001234500010060400007001001\nCH1015001234500010060400007001002",
+                                        autocomplete: "off",
+                                        value: "{values.read().get(field.key).cloned().unwrap_or_default()}",
+                                        oninput: move |e| {
+                                            values.write().insert(field.key.to_string(), e.value());
+                                            // Ein Probelauf gilt nur für genau die geprüften Eingaben.
+                                            dry_run.set(None);
+                                            deleted.set(None);
+                                        },
+                                    }
+                                } else {
+                                    input {
+                                        r#type: "text",
+                                        autocomplete: "off",
+                                        value: "{values.read().get(field.key).cloned().unwrap_or_default()}",
+                                        oninput: move |e| {
+                                            values.write().insert(field.key.to_string(), e.value());
+                                            dry_run.set(None);
+                                            deleted.set(None);
+                                        },
+                                    }
                                 }
                                 if !field.hint.is_empty() {
                                     div { class: "hint", "{field.hint}" }
@@ -716,12 +1039,33 @@ fn App() -> Element {
                             }
                         }
 
+                        // -------- Schutz übersteuern (erst nach einer Schutzregel-Meldung) --------
+                        if is_delete && (offer_force() || force()) {
+                            label { class: "confirm-check force-check",
+                                input {
+                                    r#type: "checkbox",
+                                    checked: force(),
+                                    onchange: move |e| {
+                                        force.set(e.checked());
+                                        dry_run.set(None);
+                                        deleted.set(None);
+                                    },
+                                }
+                                span {
+                                    strong { "Schutz übersteuern (force)" }
+                                    br {}
+                                    "Nur aktivieren, wenn die Löschung trotz der Meldung oben richtig ist (siehe «Wann ist «Schutz übersteuern» nötig?»). Sonst ist meist Austritt bzw. Auflösung der richtige Weg. Nach dem Aktivieren erneut einen Probelauf starten. Löschen Sie Daten, die der Netzbetreiber kennt, müssen Sie ihn separat informieren."
+                                }
+                            }
+                        }
+
                         button {
                             r#type: "button",
                             class: "run-btn",
                             disabled: sending(),
                             onclick: move |_| {
                                 let action = &ACTIONS[selected()];
+                                let is_delete = is_delete_action(action.path_suffix);
                                 let current = settings.read().clone();
 
                                 // Zugangsschlüssel für die gewählte Umgebung vorhanden?
@@ -745,6 +1089,22 @@ fn App() -> Element {
                                 let mut form: Vec<(String, String)> = Vec::new();
                                 for f in action.fields.iter() {
                                     let v = vals.get(f.key).map(|s| s.trim().to_string()).unwrap_or_default();
+                                    if is_multi_value(f.key) {
+                                        let entries = split_multi_value(&v);
+                                        if f.required && entries.is_empty() {
+                                            result
+                                                .set(
+                                                    Some(ActionResult {
+                                                        kind: ResultKind::Error,
+                                                        message: "Bitte alle Pflichtfelder ausfüllen.".into(),
+                                                    }),
+                                                );
+                                            return;
+                                        }
+                                        form.extend(entries.into_iter().map(|e| (f.key.to_string(), e)));
+                                        continue;
+                                    }
+                                    let v = if f.key == "ticket" { v.to_uppercase() } else { v };
                                     if f.required && v.is_empty() {
                                         result
                                             .set(
@@ -765,6 +1125,27 @@ fn App() -> Element {
                                     }
                                 }
                                 drop(vals);
+                                if is_delete {
+                                    let ticket = form
+                                        .iter()
+                                        .find(|(k, _)| k == "ticket")
+                                        .map(|(_, v)| v.as_str())
+                                        .unwrap_or_default();
+                                    if !is_valid_ticket(ticket) {
+                                        result
+                                            .set(
+                                                Some(ActionResult {
+                                                    kind: ResultKind::Error,
+                                                    message: "Bitte eine gültige Ticket-Nummer angeben, z. B. LHSD-1091."
+                                                        .into(),
+                                                }),
+                                            );
+                                        return;
+                                    }
+                                    if force() {
+                                        form.push(("force".into(), "true".into()));
+                                    }
+                                }
                                 let body = if is_patch {
                                     let changes = patch_changes.read();
                                     if changes.is_empty() {
@@ -847,26 +1228,41 @@ fn App() -> Element {
                                 };
                                 let url = format!(
                                     "{}/bin/com/ajila/forms/industry/leg/{}",
-                                    current.env.host(),
+                                    current.env.base_url(),
                                     action.path_suffix
                                 );
                                 let key = current.key().trim().to_string();
                                 result.set(None);
+                                let req = PendingRequest {
+                                    url,
+                                    key,
+                                    query,
+                                    body,
+                                    action_title: action.title.to_string(),
+                                    env: current.env,
+                                    deletion: None,
+                                };
+                                if is_delete {
+                                    // Probelauf: ohne dryRun-Parameter (Server-Default = nur anzeigen),
+                                    // daher ohne Bestätigung.
+                                    dry_run.set(None);
+                                    deleted.set(None);
+                                    copied.set(false);
+                                    sending.set(true);
+                                    spawn(async move {
+                                        let outcome = send_delete_request(&req).await;
+                                        apply_delete_outcome(outcome, req, result, dry_run, deleted, offer_force);
+                                        sending.set(false);
+                                    });
+                                    return;
+                                }
                                 confirm_checked.set(false);
-                                pending
-                                    .set(
-                                        Some(PendingRequest {
-                                            url,
-                                            key,
-                                            query,
-                                            body,
-                                            action_title: action.title.to_string(),
-                                            env: current.env,
-                                        }),
-                                    );
+                                pending.set(Some(req));
                             },
                             if sending() {
                                 "Wird ausgeführt …"
+                            } else if is_delete {
+                                "Probelauf starten"
                             } else {
                                 "Ausführen"
                             }
@@ -877,9 +1273,62 @@ fn App() -> Element {
                         div {
                             class: match res.kind {
                                 ResultKind::Success => "result result-ok",
+                                ResultKind::Warning => "result result-warn",
                                 ResultKind::Error => "result result-err",
                             },
                             "{res.message}"
+                        }
+                    }
+
+                    // -------- Probelauf-Ergebnis: erst hier wird echtes Löschen möglich --------
+                    if is_delete {
+                        if let Some(dr) = dry_run() {
+                            div { class: "result result-dry",
+                                DeletionSummaryView { summary: dr.summary.clone() }
+                                p { class: "summary-note",
+                                    "Bitte prüfen. Gelöscht wird genau das oben Aufgeführte. Wird eine Eingabe geändert, muss erneut ein Probelauf gemacht werden."
+                                }
+                                button {
+                                    r#type: "button",
+                                    class: "danger-btn",
+                                    disabled: sending(),
+                                    onclick: move |_| {
+                                        if let Some(dr) = dry_run() {
+                                            // Genau den geprüften Request verwenden, nicht die aktuellen Felder.
+                                            let mut req = dr.request;
+                                            if let RequestBody::Form(form) = &mut req.body {
+                                                form.push(("dryRun".into(), "false".into()));
+                                            }
+                                            req.deletion = Some(dr.summary);
+                                            confirm_checked.set(false);
+                                            pending.set(Some(req));
+                                        }
+                                    },
+                                    "Jetzt wirklich löschen"
+                                }
+                            }
+                        }
+
+                        if let Some((summary, env)) = deleted() {
+                            div { class: "result result-ok",
+                                DeletionSummaryView { summary: summary.clone() }
+                                p { class: "summary-note",
+                                    "Bitte die Zusammenfassung ins Ticket kopieren."
+                                }
+                                button {
+                                    r#type: "button",
+                                    class: "cancel-btn",
+                                    onclick: move |_| {
+                                        copy_to_clipboard(&summary.to_ticket_text(env));
+                                        copied.set(true);
+                                    },
+                                    if copied() {
+                                        "Kopiert ✓"
+                                    } else {
+                                        "Kopieren"
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -904,6 +1353,8 @@ fn App() -> Element {
                                     onclick: move |_| {
                                         settings.write().env = Env::Test;
                                         save_settings(&settings.read());
+                                        dry_run.set(None);
+                                        deleted.set(None);
                                     },
                                     "Test"
                                 }
@@ -913,6 +1364,8 @@ fn App() -> Element {
                                     onclick: move |_| {
                                         settings.write().env = Env::Prod;
                                         save_settings(&settings.read());
+                                        dry_run.set(None);
+                                        deleted.set(None);
                                     },
                                     "Produktion"
                                 }
@@ -982,6 +1435,21 @@ fn App() -> Element {
                                 "Achtung: Diese Aktion wirkt sofort auf echte Daten in der Produktion."
                             }
                         }
+                        if let Some(d) = &req.deletion {
+                            p { class: "confirm-line",
+                                "Ticket: "
+                                strong { "{d.ticket}" }
+                            }
+                            p { class: "confirm-line",
+                                "Es wird endgültig gelöscht: "
+                                strong { "{d.short()}" }
+                            }
+                            if d.forced {
+                                p { class: "confirm-warn",
+                                    "Schutz übersteuert: Der Netzbetreiber wird nicht automatisch informiert. Bitte separat benachrichtigen."
+                                }
+                            }
+                        }
 
                         label { class: "confirm-check",
                             input {
@@ -989,7 +1457,11 @@ fn App() -> Element {
                                 checked: confirm_checked(),
                                 onchange: move |e| confirm_checked.set(e.checked()),
                             }
-                            span { "Ja, ich möchte diese Aktion jetzt ausführen." }
+                            if req.deletion.is_some() {
+                                span { "Ja, ich habe den Probelauf geprüft und möchte jetzt endgültig löschen." }
+                            } else {
+                                span { "Ja, ich möchte diese Aktion jetzt ausführen." }
+                            }
                         }
 
                         div { class: "confirm-actions",
@@ -1004,7 +1476,7 @@ fn App() -> Element {
                             }
                             button {
                                 r#type: "button",
-                                class: "run-btn",
+                                class: if req.deletion.is_some() { "danger-btn" } else { "run-btn" },
                                 disabled: !confirm_checked(),
                                 onclick: move |_| {
                                     if let Some(req) = pending() {
@@ -1013,13 +1485,22 @@ fn App() -> Element {
                                         sending.set(true);
                                         result.set(None);
                                         spawn(async move {
-                                            let outcome = send_request(req.url, req.key, req.query, req.body).await;
-                                            result.set(Some(outcome));
+                                            if req.deletion.is_some() {
+                                                let outcome = send_delete_request(&req).await;
+                                                apply_delete_outcome(outcome, req, result, dry_run, deleted, offer_force);
+                                            } else {
+                                                let outcome = send_request(req.url, req.key, req.query, req.body).await;
+                                                result.set(Some(outcome));
+                                            }
                                             sending.set(false);
                                         });
                                     }
                                 },
-                                "Ausführen"
+                                if req.deletion.is_some() {
+                                    "Endgültig löschen"
+                                } else {
+                                    "Ausführen"
+                                }
                             }
                         }
                     }
@@ -1059,20 +1540,347 @@ async fn send_request(
                     message: "Erledigt ✓  Die Aktion wurde erfolgreich ausgeführt.".into(),
                 }
             } else if status.as_u16() == 403 {
-                ActionResult {
-                    kind: ResultKind::Error,
-                    message: "Der Zugangsschlüssel fehlt oder ist falsch. Bitte in den Einstellungen prüfen.".into(),
-                }
+                key_error()
             } else {
-                ActionResult {
-                    kind: ResultKind::Error,
-                    message: "Die Aktion konnte nicht ausgeführt werden. Bitte die eingegebene ID prüfen und erneut versuchen.".into(),
+                generic_error()
+            }
+        }
+        Err(_) => network_error(),
+    }
+}
+
+fn error(message: impl Into<String>) -> ActionResult {
+    ActionResult { kind: ResultKind::Error, message: message.into() }
+}
+
+fn key_error() -> ActionResult {
+    error("Der Zugangsschlüssel fehlt oder ist falsch. Bitte in den Einstellungen prüfen.")
+}
+
+fn generic_error() -> ActionResult {
+    error("Die Aktion konnte nicht ausgeführt werden. Bitte die eingegebene ID prüfen und erneut versuchen.")
+}
+
+fn network_error() -> ActionResult {
+    error("Der Server ist nicht erreichbar. Bitte Internetverbindung und Umgebung prüfen.")
+}
+
+/// Sendet einen Lösch-Aufruf (Probelauf oder echt) und wertet die JSON-Antwort aus.
+async fn send_delete_request(req: &PendingRequest) -> DeleteOutcome {
+    let failed = |result| DeleteOutcome::Failed { result, can_force: false };
+    let RequestBody::Form(form) = &req.body else {
+        return failed(generic_error());
+    };
+    let resp = match reqwest::Client::new()
+        .post(&req.url)
+        .header("X-Api-Key", &req.key)
+        .form(form)
+        .send()
+        .await
+    {
+        Ok(resp) => resp,
+        Err(_) => return failed(network_error()),
+    };
+    let status = resp.status().as_u16();
+    let body = resp.text().await.unwrap_or_default();
+    interpret_delete_response(status, &body)
+}
+
+/// Übersetzt Status und Body einer Lösch-Antwort in eine verständliche Rückmeldung.
+fn interpret_delete_response(status: u16, body: &str) -> DeleteOutcome {
+    let failed = |result| DeleteOutcome::Failed { result, can_force: false };
+    if (200..300).contains(&status) {
+        return match serde_json::from_str::<DeletionSummary>(body) {
+            Ok(summary) => DeleteOutcome::Summary(summary),
+            Err(_) => failed(error(
+                "Die Antwort des Servers konnte nicht gelesen werden. Bitte mit einem neuen Probelauf prüfen, ob gelöscht wurde.",
+            )),
+        };
+    }
+    if status == 403 {
+        return failed(key_error());
+    }
+    let detail = serde_json::from_str::<ProblemBody>(body)
+        .ok()
+        .and_then(|p| p.detail)
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty());
+    match status {
+        504 => failed(ActionResult {
+            kind: ResultKind::Warning,
+            message: format!(
+                "Der Server hat nicht rechtzeitig geantwortet. Die Löschung wurde möglicherweise trotzdem ausgeführt. \
+                 Bitte zuerst einen neuen Probelauf starten, bevor Sie es erneut versuchen – meldet dieser «nicht gefunden», \
+                 ist die Löschung bereits passiert.{}",
+                detail.map(|d| format!("\n\nMeldung des Servers: {d}")).unwrap_or_default()
+            ),
+        }),
+        409 => {
+            let detail = detail.unwrap_or_else(|| "Eine Schutzregel verhindert das Löschen.".into());
+            let manual = detail.contains("manual clean-up");
+            let hint = if manual {
+                "Dieser Fall muss manuell bereinigt werden – auch «Schutz übersteuern» hilft hier nicht."
+            } else {
+                "Falls das Löschen trotzdem nötig ist: «Schutz übersteuern» aktivieren und erneut einen Probelauf starten."
+            };
+            DeleteOutcome::Failed {
+                result: error(format!("Löschen nicht möglich: {detail}\n\n{hint}")),
+                can_force: !manual,
+            }
+        }
+        _ => failed(match detail {
+            Some(d) => error(format!("Die Aktion konnte nicht ausgeführt werden: {d}")),
+            None => generic_error(),
+        }),
+    }
+}
+
+/// Übernimmt das Ergebnis eines Lösch-Aufrufs in den Zustand der Oberfläche.
+fn apply_delete_outcome(
+    outcome: DeleteOutcome,
+    request: PendingRequest,
+    mut result: Signal<Option<ActionResult>>,
+    mut dry_run: Signal<Option<DryRun>>,
+    mut deleted: Signal<Option<(DeletionSummary, Env)>>,
+    mut offer_force: Signal<bool>,
+) {
+    match outcome {
+        DeleteOutcome::Summary(summary) if summary.dry_run => {
+            // Der gespeicherte Request ist immer der Probelauf ohne dryRun-Parameter.
+            let mut request = request;
+            if let RequestBody::Form(form) = &mut request.body {
+                form.retain(|(k, _)| k != "dryRun");
+            }
+            request.deletion = None;
+            dry_run.set(Some(DryRun { request, summary }));
+        }
+        DeleteOutcome::Summary(summary) => {
+            dry_run.set(None);
+            deleted.set(Some((summary, request.env)));
+        }
+        DeleteOutcome::Failed { result: r, can_force } => {
+            // Nach jedem Fehler ist ein neuer Probelauf nötig.
+            dry_run.set(None);
+            if can_force {
+                offer_force.set(true);
+            }
+            result.set(Some(r));
+        }
+    }
+}
+
+/// Kopiert Text in die Zwischenablage (Fallback für WebViews ohne Clipboard-API).
+fn copy_to_clipboard(text: &str) {
+    let text = serde_json::to_string(text).unwrap_or_default();
+    document::eval(&format!(
+        r#"(async function(t) {{
+            try {{ await navigator.clipboard.writeText(t); return; }} catch (e) {{}}
+            const ta = document.createElement("textarea");
+            ta.value = t;
+            ta.style.position = "fixed";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            document.body.removeChild(ta);
+        }})({text});"#
+    ));
+}
+
+/// Ausführliche Erklärung oberhalb des Formulars einer Lösch-Aktion.
+fn delete_guide_view(guide: &'static DeleteGuide) -> Element {
+    rsx! {
+        div { class: "guide",
+            div { class: "guide-warn",
+                strong { "Löschen ist nicht Austritt. " }
+                "Ist eine LEG oder ein Messpunkt beim Netzbetreiber aktiv und soll per Stichtag enden, ist die Auflösung bzw. der Austritt der richtige Weg. Löschen ist für Daten, die es nicht hätte geben dürfen."
+            }
+
+            div { class: "guide-grid",
+                div { class: "guide-section",
+                    h3 { "Wann verwenden" }
+                    ul {
+                        for item in guide.when.iter() {
+                            li { "{item}" }
+                        }
+                    }
+                }
+                div { class: "guide-section",
+                    h3 { "Was gelöscht wird" }
+                    ul {
+                        for item in guide.deletes.iter() {
+                            li { "{item}" }
+                        }
+                    }
+                }
+                div { class: "guide-section",
+                    h3 { "Was bestehen bleibt" }
+                    ul {
+                        for item in guide.keeps.iter() {
+                            li { "{item}" }
+                        }
+                    }
+                }
+                div { class: "guide-section",
+                    h3 { "Ablauf" }
+                    ol {
+                        li { "«Probelauf starten» – es wird noch nichts gelöscht." }
+                        li { "Zusammenfassung prüfen (LEG, Messpunkte, Anzahl Verträge)." }
+                        li { "«Jetzt wirklich löschen» und im Popup bestätigen." }
+                        li { "Zusammenfassung ins Ticket kopieren." }
+                    }
+                }
+            }
+
+            if !guide.notes.is_empty() {
+                ul { class: "guide-notes",
+                    for item in guide.notes.iter() {
+                        li { "{item}" }
+                    }
+                }
+            }
+
+            div { class: "guide-section guide-force",
+                h3 { "Wann ist «Schutz übersteuern» (force) nötig?" }
+                p {
+                    "Normalerweise schützt der Server Daten, die der Netzbetreiber bereits kennt. Der Probelauf meldet dann «Löschen nicht möglich» und nennt den Grund – typischerweise, wenn"
+                }
+                ul {
+                    for item in guide.force_when.iter() {
+                        li { "{item}" }
+                    }
+                }
+                p {
+                    "Erst nach einer solchen Meldung erscheint die Option «Schutz übersteuern». Aktivieren Sie sie nur, wenn die Löschung trotzdem richtig ist (z. B. Test-LEG, Duplikat, falsch erfasster Messpunkt); ist der Vorgang beim Netzbetreiber echt, ist Austritt bzw. Auflösung der richtige Weg. Die Übersteuerung wird im Audit vermerkt."
+                }
+                p { "{guide.force_never}" }
+            }
+
+            ul { class: "guide-notes",
+                li {
+                    "Es wird niemand informiert: weder Netzbetreiber noch innosolv, und es werden keine E-Mails verschickt. Laufende Abläufe werden nicht abgebrochen – Links aus alten E-Mails führen danach zu einer Fehlermeldung."
+                }
+                li {
+                    "Jeder gelöschte Datensatz wird mit Ticket und Begründung im Audit gesichert und kann von der Entwicklung wiederhergestellt werden (Verträge ohne PDF)."
                 }
             }
         }
-        Err(_) => ActionResult {
-            kind: ResultKind::Error,
-            message: "Der Server ist nicht erreichbar. Bitte Internetverbindung und Umgebung prüfen.".into(),
-        },
+    }
+}
+
+/// Zusammenfassung eines Probelaufs bzw. einer ausgeführten Löschung.
+#[component]
+fn DeletionSummaryView(summary: DeletionSummary) -> Element {
+    let title = if summary.dry_run { "Probelauf – es würden gelöscht:" } else { "Gelöscht ✓" };
+    rsx! {
+        div { class: "summary",
+            div { class: "summary-title", "{title}" }
+            div { class: "summary-meta", "LEG {summary.leg_label()} · Ticket {summary.ticket}" }
+            ul {
+                if summary.leg_deleted {
+                    li { "die LEG {summary.leg_label()}" }
+                }
+                if !summary.participant_ids.is_empty() {
+                    li {
+                        "{summary.participant_ids.len()} Teilnahme(n)"
+                        ul {
+                            for id in summary.participant_ids.iter() {
+                                li { class: "mono", "{id}" }
+                            }
+                        }
+                    }
+                }
+                li {
+                    "{summary.measuring_points} Messpunkt(e)"
+                    if !summary.measuring_point_numbers.is_empty() {
+                        ul {
+                            for nr in summary.measuring_point_numbers.iter() {
+                                li { class: "mono", "{nr}" }
+                            }
+                        }
+                    }
+                }
+                li { "{summary.contracts} Vertrag/Verträge" }
+            }
+            if !summary.detached_measuring_point_numbers.is_empty() {
+                div { class: "summary-sub",
+                    "Bleiben bestehen, nur die Verknüpfung dieser Teilnahme wird entfernt:"
+                    ul {
+                        for nr in summary.detached_measuring_point_numbers.iter() {
+                            li { class: "mono", "{nr}" }
+                        }
+                    }
+                }
+            }
+            if summary.forced {
+                div { class: "summary-sub", "Schutz übersteuert (force)." }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ticket_format() {
+        assert!(is_valid_ticket("LHSD-1091"));
+        assert!(is_valid_ticket("A1-2"));
+        assert!(!is_valid_ticket("lhsd-1091"));
+        assert!(!is_valid_ticket("1HSD-1091"));
+        assert!(!is_valid_ticket("LHSD-"));
+        assert!(!is_valid_ticket("LHSD1091"));
+        assert!(!is_valid_ticket("LHSD-10-91"));
+        assert!(!is_valid_ticket(""));
+    }
+
+    #[test]
+    fn multi_value_split() {
+        assert_eq!(split_multi_value("CH1, CH2;CH3\nCH4  CH5"), vec!["CH1", "CH2", "CH3", "CH4", "CH5"]);
+        assert!(split_multi_value(" , ; \n").is_empty());
+    }
+
+    #[test]
+    fn parses_summary() {
+        let body = r#"{"dryRun":true,"forced":false,"ticket":"LHSD-1070","legInternalId":"f79ad9f2",
+            "legName":"LEG Stadt Luzern Blattenmoos","legDeleted":false,"participantIds":["e7adabb8"],
+            "measuringPointNumbers":["CH1015001234500010060400007001001"],"detachedMeasuringPointNumbers":[],
+            "measuringPoints":1,"contracts":0}"#;
+        let DeleteOutcome::Summary(s) = interpret_delete_response(200, body) else { panic!("expected summary") };
+        assert!(s.dry_run);
+        assert_eq!(s.measuring_points, 1);
+        assert_eq!(s.leg_label(), "«LEG Stadt Luzern Blattenmoos» (f79ad9f2)");
+    }
+
+    #[test]
+    fn summary_without_dry_run_flag_is_rejected() {
+        assert!(matches!(interpret_delete_response(200, "{}"), DeleteOutcome::Failed { .. }));
+    }
+
+    #[test]
+    fn conflict_offers_force_unless_manual() {
+        let body = r#"{"type":"about:blank","title":"Conflict","status":409,"detail":"LEG is known to the VNB; pass force=true"}"#;
+        assert!(matches!(interpret_delete_response(409, body), DeleteOutcome::Failed { can_force: true, .. }));
+        let body = r#"{"status":409,"detail":"needs manual clean-up"}"#;
+        assert!(matches!(interpret_delete_response(409, body), DeleteOutcome::Failed { can_force: false, .. }));
+    }
+
+    #[test]
+    fn gateway_timeout_is_warning() {
+        let DeleteOutcome::Failed { result, .. } = interpret_delete_response(504, r#"{"status":504,"detail":"x"}"#) else {
+            panic!("expected failure")
+        };
+        assert!(result.kind == ResultKind::Warning);
+    }
+
+    #[test]
+    fn other_errors_show_detail_or_fallback() {
+        let DeleteOutcome::Failed { result, .. } = interpret_delete_response(404, r#"{"detail":"LEG not found"}"#) else {
+            panic!()
+        };
+        assert!(result.message.contains("LEG not found"));
+        let DeleteOutcome::Failed { result, .. } = interpret_delete_response(500, "<html>") else { panic!() };
+        assert_eq!(result.message, generic_error().message);
     }
 }
