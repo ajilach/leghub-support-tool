@@ -134,15 +134,20 @@ body {
 }
 
 /* -------- Hauptbereich -------- */
+/* Der Scroll-Container füllt die ganze Breite, damit die Scrollbar am Fensterrand sitzt;
+   begrenzt wird nur die Breite des Inhalts. */
 .content {
     flex: 1;
     overflow-y: auto;
     padding: 40px 48px;
-    max-width: 660px;
 }
 
-.content-wide {
-    max-width: 1040px;
+.content > * {
+    max-width: 564px;
+}
+
+.content-wide > * {
+    max-width: 944px;
 }
 
 .env-badge {
