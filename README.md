@@ -20,6 +20,22 @@ Ein kleines Programm, mit dem Support-Aufgaben für LegHub-Gründungen und
 
 > **Achtung:** In der Umgebung **Produktion** wirken die Aktionen sofort auf echte Daten.
 
+### Austritt & Auflösung
+
+**LEG auflösen** und **Messpunkte austreten lassen** lösen denselben Ablauf aus wie das Dashboard
+(Meldung an den Netzbetreiber bzw. innosolv, danach Enddatum in LEGhub), aber mit **frei wählbarem Datum**.
+
+- Es gibt **keinen Probelauf**: Das Enddatum ist danach unveränderlich. Das Bestätigungs-Popup zeigt LEG,
+  Messpunkte und Datum noch einmal und warnt bei einem Datum in der Vergangenheit oder weit in der Zukunft.
+- Abgelehnt wird nur ein Datum vor dem Start, ein bereits gesetztes Enddatum oder was der Netzbetreiber ablehnt.
+  Das Ergebnis zeigt pro Messpunkt, was erledigt ist und was nicht, mit Fehlerquelle (Prüfung in LEGhub,
+  Netzbetreiber, LEGhub-Datenbank).
+- Bei einem wiederholbaren Fehler (z. B. Speichern fehlgeschlagen) oder ausgebliebener Antwort erscheint
+  **Erneut versuchen**. Das ist unschädlich; beim Messpunkt-Austritt werden nur die noch offenen Messpunkte
+  wiederholt.
+- **Nur in LEGhub beenden** überspringt die Meldung an den Netzbetreiber – für Netzbetreiber, deren
+  Schnittstelle noch keine Austritte kann. Der Netzbetreiber muss dann separat informiert werden.
+
 ### Löschen
 
 **LEG löschen**, **Teilnahme löschen** und **Messpunkte löschen** laufen immer in zwei Schritten:
