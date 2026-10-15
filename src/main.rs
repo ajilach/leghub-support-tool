@@ -12,8 +12,13 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 mod flows;
+mod termination;
 
 use flows::Overview;
+use termination::{
+    is_date_field, is_termination_action, parse_iso_date, send_termination_request, swiss_date, termination_guide_view,
+    TerminationInfo, TerminationOutcome, TerminationReport, TerminationReportView,
+};
 
 const STYLE: Asset = asset!("/assets/style.css");
 const LOGO: Asset = asset!("/assets/leghub_logo.svg");
@@ -162,6 +167,29 @@ static ACTIONS: &[Action] = &[
         fields: &[Field { key: "documentId", label: "Dokument-ID", hint: "ID wie im SC Sign Mail angezeigt", required: true }],
     },
     Action {
+        group: "Austritt & Auflösung",
+        title: "LEG auflösen",
+        description: "Löst eine LEG per Stichtag auf – derselbe Ablauf wie im Dashboard, aber mit frei wählbarem Datum: Meldung an den Netzbetreiber, danach Enddatum in LEGhub.",
+        path_suffix: "supportDeactivateLeg",
+        fields: &[
+            Field { key: "legId", label: "Gründungs-ID", hint: "Interne LEG-ID wie im Dashboard (im Link «leg-detail?legId=…»)", required: true },
+            Field { key: "endingDate", label: "Enddatum", hint: "Letzter Tag, an dem die LEG noch besteht (meist der Monatsletzte)", required: true },
+            Field { key: "reason", label: "Begründung", hint: "Kurzer Grund, z. B. «Auflösung auf Wunsch der Vertretung».", required: false },
+        ],
+    },
+    Action {
+        group: "Austritt & Auflösung",
+        title: "Messpunkte austreten lassen",
+        description: "Beendet die Teilnahme einzelner Messpunkte per Stichtag – derselbe Ablauf wie im Dashboard, aber mit frei wählbarem Datum: Meldung an den Netzbetreiber, danach Enddatum in LEGhub.",
+        path_suffix: "supportDeactivateMeasuringPoint",
+        fields: &[
+            Field { key: "legId", label: "Gründungs-ID", hint: "ID der LEG, zu der die Messpunkte gehören", required: true },
+            Field { key: "measuringPointNumber", label: "Messpunkte", hint: "Mehrere Nummern durch Komma oder Zeilenumbruch trennen. Alle erhalten dasselbe Enddatum.", required: true },
+            Field { key: "endingDate", label: "Enddatum", hint: "Letzter Tag der Teilnahme (meist der Monatsletzte)", required: true },
+            Field { key: "reason", label: "Begründung", hint: "Kurzer Grund, z. B. «Umzug».", required: false },
+        ],
+    },
+    Action {
         group: "Löschen",
         title: "LEG löschen",
         description: "Löscht eine LEG samt allen Teilnahmen, Messpunkten und Verträgen. Zuerst wird immer ein Probelauf gemacht, der zeigt, was gelöscht würde.",
@@ -200,7 +228,7 @@ static ACTIONS: &[Action] = &[
 ];
 
 /// Reihenfolge der Gruppen im Seitenpanel.
-static GROUPS: &[&str] = &["Gründungen", "Teilnahmen", "Unterschriften", "Löschen"];
+static GROUPS: &[&str] = &["Gründungen", "Teilnahmen", "Unterschriften", "Austritt & Auflösung", "Löschen"];
 
 // ----------------------------------------------------------------------------
 // Lösch-Aktionen (immer zuerst als Probelauf)
@@ -759,6 +787,8 @@ struct PendingRequest {
     env: Env,
     /// Bei einer echten Löschung: die Zusammenfassung aus dem vorangegangenen Probelauf.
     deletion: Option<DeletionSummary>,
+    /// Bei Austritt / Auflösung: die Angaben fürs Bestätigungs-Popup und die Zusammenfassung.
+    termination: Option<TerminationInfo>,
 }
 
 // ----------------------------------------------------------------------------
@@ -804,6 +834,11 @@ fn App() -> Element {
     let mut force = use_signal(|| false);
     let mut offer_force = use_signal(|| false);
     let mut copied = use_signal(|| false);
+    // Austritt / Auflösung: «nur in LEGhub» (Netzbetreiber nicht informieren), letztes Ergebnis und ein
+    // Request, der erneut gesendet werden darf (nach ausgebliebener Antwort oder einem wiederholbaren Fehler).
+    let mut storage_only = use_signal(|| false);
+    let mut terminated = use_signal(|| Option::<TerminationReport>::None);
+    let mut retry_request = use_signal(|| Option::<PendingRequest>::None);
 
     // Wechselt zu einer Aktion und leert die zuvor erfassten Eingaben.
     let mut select_action = move |i: usize| {
@@ -815,12 +850,16 @@ fn App() -> Element {
         deleted.set(None);
         force.set(false);
         offer_force.set(false);
+        storage_only.set(false);
+        terminated.set(None);
+        retry_request.set(None);
         show_overview.set(false);
     };
 
     let action = &ACTIONS[selected()];
     let patch_fields = patch_fields_for(action.path_suffix);
     let is_delete = is_delete_action(action.path_suffix);
+    let is_termination = is_termination_action(action.path_suffix);
 
     rsx! {
         document::Stylesheet { href: STYLE }
@@ -883,6 +922,9 @@ fn App() -> Element {
                     if let Some(guide) = delete_guide(action) {
                         {delete_guide_view(guide)}
                     }
+                    if is_termination {
+                        {termination_guide_view(action.path_suffix == "supportDeactivateLeg")}
+                    }
 
                     form { onsubmit: move |e| e.stop_propagation(),
                         for field in action.fields.iter() {
@@ -904,6 +946,14 @@ fn App() -> Element {
                                             // Ein Probelauf gilt nur für genau die geprüften Eingaben.
                                             dry_run.set(None);
                                             deleted.set(None);
+                                        },
+                                    }
+                                } else if is_date_field(field.key) {
+                                    input {
+                                        r#type: "date",
+                                        value: "{values.read().get(field.key).cloned().unwrap_or_default()}",
+                                        oninput: move |e| {
+                                            values.write().insert(field.key.to_string(), e.value());
                                         },
                                     }
                                 } else {
@@ -1059,6 +1109,22 @@ fn App() -> Element {
                             }
                         }
 
+                        // -------- Nur in LEGhub beenden (Austritt / Auflösung) --------
+                        if is_termination {
+                            label { class: "confirm-check force-check",
+                                input {
+                                    r#type: "checkbox",
+                                    checked: storage_only(),
+                                    onchange: move |e| storage_only.set(e.checked()),
+                                }
+                                span {
+                                    strong { "Nur in LEGhub beenden – Netzbetreiber nicht informieren" }
+                                    br {}
+                                    "Nur für Netzbetreiber, deren Schnittstelle keine Austritte bzw. Auflösungen kann. Der Netzbetreiber muss dann separat informiert werden."
+                                }
+                            }
+                        }
+
                         button {
                             r#type: "button",
                             class: "run-btn",
@@ -1144,6 +1210,37 @@ fn App() -> Element {
                                     }
                                     if force() {
                                         form.push(("force".into(), "true".into()));
+                                    }
+                                }
+                                let mut termination = None;
+                                if is_termination_action(action.path_suffix) {
+                                    let get = |key: &str| {
+                                        form.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone()).unwrap_or_default()
+                                    };
+                                    let ending_date = get("endingDate");
+                                    if parse_iso_date(&ending_date).is_none() {
+                                        result
+                                            .set(
+                                                Some(ActionResult {
+                                                    kind: ResultKind::Error,
+                                                    message: "Bitte ein gültiges Enddatum wählen.".into(),
+                                                }),
+                                            );
+                                        return;
+                                    }
+                                    termination = Some(TerminationInfo {
+                                        is_leg: action.path_suffix == "supportDeactivateLeg",
+                                        leg_id: get("legId"),
+                                        ending_date,
+                                        measuring_points: form
+                                            .iter()
+                                            .filter(|(k, _)| k == "measuringPointNumber")
+                                            .map(|(_, v)| v.clone())
+                                            .collect(),
+                                        storage_only: storage_only(),
+                                    });
+                                    if storage_only() {
+                                        form.push(("storageOnly".into(), "true".into()));
                                     }
                                 }
                                 let body = if is_patch {
@@ -1241,6 +1338,7 @@ fn App() -> Element {
                                     action_title: action.title.to_string(),
                                     env: current.env,
                                     deletion: None,
+                                    termination,
                                 };
                                 if is_delete {
                                     // Probelauf: ohne dryRun-Parameter (Server-Default = nur anzeigen),
@@ -1256,6 +1354,8 @@ fn App() -> Element {
                                     });
                                     return;
                                 }
+                                terminated.set(None);
+                                retry_request.set(None);
                                 confirm_checked.set(false);
                                 pending.set(Some(req));
                             },
@@ -1328,6 +1428,48 @@ fn App() -> Element {
                                         "Kopieren"
                                     }
                                 }
+                            }
+                        }
+                    }
+
+                    // -------- Ergebnis Austritt / Auflösung --------
+                    if is_termination {
+                        if let Some(report) = terminated() {
+                            div {
+                                class: match report.kind() {
+                                    ResultKind::Success => "result result-ok",
+                                    ResultKind::Warning => "result result-warn",
+                                    ResultKind::Error => "result result-err",
+                                },
+                                TerminationReportView { report: report.clone() }
+                                p { class: "summary-note", "Bitte die Zusammenfassung ins Ticket kopieren." }
+                                button {
+                                    r#type: "button",
+                                    class: "cancel-btn",
+                                    onclick: move |_| {
+                                        if let Some(report) = terminated() {
+                                            copy_to_clipboard(&report.to_ticket_text(settings.read().env));
+                                            copied.set(true);
+                                        }
+                                    },
+                                    if copied() {
+                                        "Kopiert ✓"
+                                    } else {
+                                        "Kopieren"
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(req) = retry_request() {
+                            button {
+                                r#type: "button",
+                                class: "run-btn",
+                                disabled: sending(),
+                                onclick: move |_| {
+                                    confirm_checked.set(false);
+                                    pending.set(Some(req.clone()));
+                                },
+                                "Erneut versuchen"
                             }
                         }
                     }
@@ -1435,6 +1577,34 @@ fn App() -> Element {
                                 "Achtung: Diese Aktion wirkt sofort auf echte Daten in der Produktion."
                             }
                         }
+                        if let Some(t) = &req.termination {
+                            p { class: "confirm-line",
+                                "LEG: "
+                                span { class: "mono", "{t.leg_id}" }
+                            }
+                            if !t.measuring_points.is_empty() {
+                                p { class: "confirm-line",
+                                    "Messpunkte: "
+                                    span { class: "mono", "{t.measuring_points.join(\", \")}" }
+                                }
+                            }
+                            p { class: "confirm-line",
+                                "Enddatum: "
+                                strong { "{swiss_date(&t.ending_date)}" }
+                            }
+                            for w in t.date_warnings() {
+                                p { class: "confirm-warn", "{w}" }
+                            }
+                            if t.storage_only {
+                                p { class: "confirm-warn",
+                                    "Nur in LEGhub: Der Netzbetreiber wird NICHT informiert. Bitte separat melden – über das Dashboard geht das danach nicht mehr."
+                                }
+                            } else {
+                                p { class: "confirm-warn",
+                                    "Der Netzbetreiber wird sofort informiert. Das Enddatum kann danach nicht mehr geändert werden."
+                                }
+                            }
+                        }
                         if let Some(d) = &req.deletion {
                             p { class: "confirm-line",
                                 "Ticket: "
@@ -1459,6 +1629,8 @@ fn App() -> Element {
                             }
                             if req.deletion.is_some() {
                                 span { "Ja, ich habe den Probelauf geprüft und möchte jetzt endgültig löschen." }
+                            } else if req.termination.is_some() {
+                                span { "Ja, ich habe LEG, Datum und Messpunkte geprüft. Das Enddatum ist danach unveränderlich." }
                             } else {
                                 span { "Ja, ich möchte diese Aktion jetzt ausführen." }
                             }
@@ -1476,7 +1648,7 @@ fn App() -> Element {
                             }
                             button {
                                 r#type: "button",
-                                class: if req.deletion.is_some() { "danger-btn" } else { "run-btn" },
+                                class: if req.deletion.is_some() || req.termination.is_some() { "danger-btn" } else { "run-btn" },
                                 disabled: !confirm_checked(),
                                 onclick: move |_| {
                                     if let Some(req) = pending() {
@@ -1488,6 +1660,9 @@ fn App() -> Element {
                                             if req.deletion.is_some() {
                                                 let outcome = send_delete_request(&req).await;
                                                 apply_delete_outcome(outcome, req, result, dry_run, deleted, offer_force);
+                                            } else if req.termination.is_some() {
+                                                let outcome = send_termination_request(&req).await;
+                                                apply_termination_outcome(outcome, req, result, terminated, retry_request, copied);
                                             } else {
                                                 let outcome = send_request(req.url, req.key, req.query, req.body).await;
                                                 result.set(Some(outcome));
@@ -1498,6 +1673,8 @@ fn App() -> Element {
                                 },
                                 if req.deletion.is_some() {
                                     "Endgültig löschen"
+                                } else if req.termination.is_some() {
+                                    "Endgültig ausführen"
                                 } else {
                                     "Ausführen"
                                 }
@@ -1669,6 +1846,52 @@ fn apply_delete_outcome(
     }
 }
 
+/// Übernimmt das Ergebnis eines Austritts / einer Auflösung in den Zustand der Oberfläche.
+///
+/// «Erneut versuchen» wiederholt nur, was sich wiederholen lässt: beim Messpunkt-Austritt nur die Messpunkte
+/// mit wiederholbarem Fehler – die erledigten würden sonst als «bereits ausgetreten» gemeldet.
+fn apply_termination_outcome(
+    outcome: TerminationOutcome,
+    request: PendingRequest,
+    mut result: Signal<Option<ActionResult>>,
+    mut terminated: Signal<Option<TerminationReport>>,
+    mut retry_request: Signal<Option<PendingRequest>>,
+    mut copied: Signal<bool>,
+) {
+    copied.set(false);
+    match outcome {
+        TerminationOutcome::Report(report) => {
+            retry_request.set(if report.any_retryable() { Some(retry_for(&request, &report)) } else { None });
+            terminated.set(Some(report));
+        }
+        TerminationOutcome::Failed { result: r, can_retry } => {
+            terminated.set(None);
+            retry_request.set(if can_retry { Some(request) } else { None });
+            result.set(Some(r));
+        }
+    }
+}
+
+/// Der Request für «Erneut versuchen»: beim Messpunkt-Austritt nur die wiederholbaren Messpunkte.
+fn retry_for(request: &PendingRequest, report: &TerminationReport) -> PendingRequest {
+    let mut retry = request.clone();
+    let Some(info) = retry.termination.as_mut() else { return retry };
+    if info.is_leg {
+        return retry;
+    }
+    let keep: Vec<String> = report
+        .rows
+        .iter()
+        .filter(|r| r.retryable())
+        .filter_map(|r| r.measuring_point.clone())
+        .collect();
+    if let RequestBody::Form(form) = &mut retry.body {
+        form.retain(|(k, v)| k != "measuringPointNumber" || keep.contains(v));
+    }
+    info.measuring_points = keep;
+    retry
+}
+
 /// Kopiert Text in die Zwischenablage (Fallback für WebViews ohne Clipboard-API).
 fn copy_to_clipboard(text: &str) {
     let text = serde_json::to_string(text).unwrap_or_default();
@@ -1693,7 +1916,7 @@ fn delete_guide_view(guide: &'static DeleteGuide) -> Element {
         div { class: "guide",
             div { class: "guide-warn",
                 strong { "Löschen ist nicht Austritt. " }
-                "Ist eine LEG oder ein Messpunkt beim Netzbetreiber aktiv und soll per Stichtag enden, ist die Auflösung bzw. der Austritt der richtige Weg. Löschen ist für Daten, die es nicht hätte geben dürfen."
+                "Ist eine LEG oder ein Messpunkt beim Netzbetreiber aktiv und soll per Stichtag enden, ist «LEG auflösen» bzw. «Messpunkte austreten lassen» (Gruppe «Austritt & Auflösung») der richtige Weg. Löschen ist für Daten, die es nicht hätte geben dürfen."
             }
 
             div { class: "guide-grid",
