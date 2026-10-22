@@ -388,6 +388,10 @@ struct DeletionSummary {
     measuring_points: u64,
     #[serde(default)]
     contracts: u64,
+    /// Nur einzelne Messpunkte gelöscht: Die Teilnahme ist dann nur betroffen, nicht unbedingt gelöscht.
+    /// Kommt nicht vom Server, sondern aus dem gesendeten Request.
+    #[serde(skip)]
+    measuring_point_filter: bool,
 }
 
 impl DeletionSummary {
@@ -399,6 +403,11 @@ impl DeletionSummary {
         }
     }
 
+    /// Beim Löschen einzelner Messpunkte bleibt die Teilnahme bestehen, wenn sie weitere Messpunkte hat.
+    fn participants_label(&self) -> &'static str {
+        if self.measuring_point_filter { "Teilnahme(n) betroffen" } else { "Teilnahme(n)" }
+    }
+
     /// Einzeilige Kurzfassung, z. B. für das Bestätigungs-Popup.
     fn short(&self) -> String {
         let mut parts = Vec::new();
@@ -406,7 +415,7 @@ impl DeletionSummary {
             parts.push(format!("LEG {}", self.leg_label()));
         }
         if !self.participant_ids.is_empty() {
-            parts.push(format!("{} Teilnahme(n)", self.participant_ids.len()));
+            parts.push(format!("{} {}", self.participant_ids.len(), self.participants_label()));
         }
         parts.push(format!("{} Messpunkt(e)", self.measuring_points));
         parts.push(format!("{} Vertrag/Verträge", self.contracts));
@@ -422,7 +431,8 @@ impl DeletionSummary {
             format!("LEG gelöscht: {}", if self.leg_deleted { "ja" } else { "nein" }),
         ];
         if !self.participant_ids.is_empty() {
-            lines.push(format!("Teilnahmen: {}", self.participant_ids.join(", ")));
+            let label = if self.measuring_point_filter { "Betroffene Teilnahmen" } else { "Teilnahmen" };
+            lines.push(format!("{label}: {}", self.participant_ids.join(", ")));
         }
         lines.push(format!("Messpunkte ({}): {}", self.measuring_points, self.measuring_point_numbers.join(", ")));
         lines.push(format!("Verträge: {}", self.contracts));
@@ -1760,7 +1770,11 @@ async fn send_delete_request(req: &PendingRequest) -> DeleteOutcome {
     };
     let status = resp.status().as_u16();
     let body = resp.text().await.unwrap_or_default();
-    interpret_delete_response(status, &body)
+    let mut outcome = interpret_delete_response(status, &body);
+    if let DeleteOutcome::Summary(summary) = &mut outcome {
+        summary.measuring_point_filter = form.iter().any(|(k, _)| k == "measuringPointNumber");
+    }
+    outcome
 }
 
 /// Übersetzt Status und Body einer Lösch-Antwort in eine verständliche Rückmeldung.
@@ -2005,7 +2019,7 @@ fn DeletionSummaryView(summary: DeletionSummary) -> Element {
                 }
                 if !summary.participant_ids.is_empty() {
                     li {
-                        "{summary.participant_ids.len()} Teilnahme(n)"
+                        "{summary.participant_ids.len()} {summary.participants_label()}"
                         ul {
                             for id in summary.participant_ids.iter() {
                                 li { class: "mono", "{id}" }
