@@ -72,10 +72,7 @@ static FLOWS: &[Flow] = &[
                 actor: "LEGhub",
                 stuck: "die Prüfanfrage an den Netzbetreiber nie versendet wurde – oder das Speichern fehlgeschlagen ist und der Vorgang zurückgesetzt wurde.",
                 skipped: "",
-                actions: &[
-                    ("patchFounding", "Angaben anpassen"),
-                    ("restartFounding", "Neu starten"),
-                ],
+                actions: &[("restartFounding", "Neu starten")],
                 kind: StageKind::Draft,
             },
             Stage {
@@ -132,10 +129,7 @@ static FLOWS: &[Flow] = &[
                 actor: "LEGhub",
                 stuck: "der Beitritt nach einer Ablehnung oder einem Speicherfehler zurückgesetzt wurde.",
                 skipped: "",
-                actions: &[
-                    ("patchParticipation", "Angaben anpassen"),
-                    ("restartParticipation", "Neu starten"),
-                ],
+                actions: &[("restartParticipation", "Neu starten")],
                 kind: StageKind::Draft,
             },
             Stage {
