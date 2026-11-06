@@ -182,9 +182,7 @@ pub async fn send_termination_request(req: &PendingRequest) -> TerminationOutcom
     let Some(info) = req.termination.clone() else {
         return TerminationOutcome::Failed { result: crate::generic_error(), can_retry: false };
     };
-    let RequestBody::Form(form) = &req.body else {
-        return TerminationOutcome::Failed { result: crate::generic_error(), can_retry: false };
-    };
+    let RequestBody::Form(form) = &req.body;
     let client = match reqwest::Client::builder().timeout(std::time::Duration::from_secs(TIMEOUT_SECS)).build() {
         Ok(client) => client,
         Err(_) => return TerminationOutcome::Failed { result: crate::generic_error(), can_retry: false },

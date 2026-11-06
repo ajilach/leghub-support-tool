@@ -86,15 +86,6 @@ static ACTIONS: &[Action] = &[
         fields: &[Field { key: "id", label: "Gründungs-ID", hint: "ID wie im Dashboard aufgelistet", required: true }],
     },
     Action {
-        group: "Gründungen",
-        title: "Gründung anpassen",
-        description: "Ändert einzelne Angaben einer bestehenden Gründung. Nur die angegebenen Felder werden überschrieben, alles andere bleibt unverändert.",
-        path_suffix: "patchFounding",
-        fields: &[
-            Field { key: "legId", label: "Gründungs-ID", hint: "ID wie im Dashboard aufgelistet", required: true },
-        ],
-    },
-    Action {
         group: "Teilnahmen",
         title: "Teilnahme neu starten",
         description: "Startet den gesamten Teilnahme-Ablauf mit den bereits erfassten Daten noch einmal von vorne.",
@@ -147,16 +138,6 @@ static ACTIONS: &[Action] = &[
         fields: &[
             Field { key: "id", label: "Teilnahme-ID", hint: "ID wie im Dashboard aufgelistet", required: true },
             Field { key: "message", label: "Begründung", hint: "Grund der Ablehnung (wird der Person mitgeteilt)", required: false },
-        ],
-    },
-    Action {
-        group: "Teilnahmen",
-        title: "Teilnahme anpassen",
-        description: "Ändert einzelne Angaben einer bestehenden Teilnahme. Nur die angegebenen Felder werden überschrieben, alles andere bleibt unverändert.",
-        path_suffix: "patchParticipation",
-        fields: &[
-            Field { key: "legId", label: "Gründungs-ID", hint: "ID der zugehörigen Gründung", required: true },
-            Field { key: "participationId", label: "Teilnahme-ID", hint: "ID wie im Dashboard aufgelistet", required: true },
         ],
     },
     Action {
@@ -476,200 +457,6 @@ struct DryRun {
 // Änderbare Felder für die "anpassen"-Aktionen (Feld-Auswahl statt JSON)
 // ----------------------------------------------------------------------------
 
-/// Art des Werts eines änderbaren Felds — bestimmt das Eingabeelement und die
-/// JSON-Umwandlung.
-#[derive(Clone, Copy, PartialEq)]
-enum ValueKind {
-    Text,
-    Number,
-    /// Ja / Nein.
-    Bool,
-    /// Datum, wird als Zeitpunkt (…T00:00:00Z) gesendet.
-    Date,
-    /// Datum ohne Uhrzeit (JJJJ-MM-TT), z. B. Geburtsdatum.
-    LocalDate,
-    /// Auswahl aus festen Werten: (technischer Wert, Beschriftung).
-    Choice(&'static [(&'static str, &'static str)]),
-}
-
-struct PatchField {
-    /// Punkt-Pfad in der gespeicherten Struktur, z. B. "energyConfiguration.discountLevel".
-    path: &'static str,
-    label: &'static str,
-    kind: ValueKind,
-}
-
-// --- Auswahllisten ---
-const VISIBILITY: &[(&str, &str)] = &[("PUBLIC", "Öffentlich"), ("PRIVATE", "Privat")];
-const DISCOUNT: &[(&str, &str)] = &[("HIGH", "Hoch"), ("LOW", "Tief")];
-const GRID_LEVEL: &[(&str, &str)] = &[
-    ("SEVEN", "Netzebene 7"),
-    ("FIVE", "Netzebene 5"),
-    ("FIVE_EXCLUSIVE", "Netzebene 5 (exklusiv)"),
-];
-const BILLING_TYPE: &[(&str, &str)] = &[
-    ("MANAGED", "Verwaltet"),
-    ("DIY", "Selbst"),
-    ("SHARED", "Geteilt"),
-];
-const PRICING_MODEL: &[(&str, &str)] = &[
-    ("STANDARD_TARIFF", "Standardtarif"),
-    ("INDIVIDUAL_FIXED_PRICE", "Individueller Fixpreis"),
-    ("CUSTOMIZED_STANDARD_TARIFF", "Angepasster Standardtarif"),
-    ("CUSTOMIZED_PRIZING_MODEL", "Angepasstes Preismodell"),
-];
-const PARTICIPANT_TYPE: &[(&str, &str)] = &[
-    ("CONSUMER", "Verbraucher"),
-    ("PRODUCER", "Produzent"),
-    ("PROSUMER", "Prosumer"),
-    ("NEITHER", "Keiner"),
-];
-const LEGAL_FORM: &[(&str, &str)] = &[
-    ("PRIVATE_PERSON", "Privatperson"),
-    ("ENTERPRISE", "Unternehmen"),
-    ("LOCAL_AUTHORITY", "Gemeinde / Behörde"),
-    ("ASSOCIATION", "Verein"),
-    ("COOPERATIVE", "Genossenschaft"),
-    ("FOUNDATION", "Stiftung"),
-    ("OTHER", "Andere"),
-];
-const LEG_STATE: &[(&str, &str)] = &[
-    ("DRAFT", "Entwurf"),
-    ("WAITING_FOR_VNB_APPROVAL", "Wartet auf Netzbetreiber"),
-    ("WAITING_FOR_SIGNATURE", "Wartet auf Unterschrift"),
-    ("WAITING_FOR_PRODUCER", "Wartet auf Produzent"),
-    ("WAITING_FOR_CONSUMER", "Wartet auf Verbraucher"),
-    ("ACTIVE", "Aktiv"),
-    ("TERMINATED", "Beendet"),
-    ("ERROR", "Fehler"),
-];
-const PART_STATE: &[(&str, &str)] = &[
-    ("DRAFT", "Entwurf"),
-    ("WAITING_FOR_FOUNDER_APPROVAL", "Wartet auf Gründer"),
-    ("WAITING_FOR_VNB_APPROVAL", "Wartet auf Netzbetreiber"),
-    ("WAITING_FOR_SIGNATURE", "Wartet auf Unterschrift"),
-    ("WAITING_FOR_PRODUCER", "Wartet auf Produzent"),
-    ("WAITING_FOR_CONSUMER", "Wartet auf Verbraucher"),
-    ("ACTIVE", "Aktiv"),
-    ("TERMINATED", "Beendet"),
-    ("ERROR", "Fehler"),
-];
-
-const LANGUAGE: &[(&str, &str)] = &[
-    ("DE", "Deutsch"),
-    ("FR", "Französisch"),
-    ("IT", "Italienisch"),
-    ("EN", "Englisch"),
-];
-
-static PATCH_FIELDS_FOUNDING: &[PatchField] = &[
-    PatchField { path: "identity.name", label: "Name der Gründung", kind: ValueKind::Text },
-    PatchField { path: "identity.externalLegId", label: "Externe Gründungs-ID", kind: ValueKind::Text },
-    PatchField { path: "visibility.legVisibility", label: "Sichtbarkeit", kind: ValueKind::Choice(VISIBILITY) },
-    PatchField { path: "visibility.listFullAddress", label: "Vollständige Adresse öffentlich anzeigen", kind: ValueKind::Bool },
-    PatchField { path: "skipScSignProcess", label: "Unterschrifts-Prozess (SC Sign) überspringen", kind: ValueKind::Bool },
-    PatchField { path: "ownership.languageCode", label: "Sprache", kind: ValueKind::Choice(LANGUAGE) },
-    PatchField { path: "ownership.newsletterConsent", label: "Newsletter-Zustimmung", kind: ValueKind::Bool },
-    PatchField { path: "lifecycle.startingDateAsap", label: "Start sobald wie möglich", kind: ValueKind::Bool },
-    PatchField { path: "lifecycle.startingDate", label: "Startdatum", kind: ValueKind::Date },
-    PatchField { path: "lifecycle.minimumTermMonths", label: "Mindestlaufzeit (Monate)", kind: ValueKind::Number },
-    PatchField { path: "energyConfiguration.discountLevel", label: "Rabattstufe", kind: ValueKind::Choice(DISCOUNT) },
-    PatchField { path: "energyConfiguration.energyModelState", label: "Status", kind: ValueKind::Choice(LEG_STATE) },
-    PatchField { path: "energyConfiguration.gridConnection.gridLevel", label: "Netzebene", kind: ValueKind::Choice(GRID_LEVEL) },
-    PatchField { path: "energyConfiguration.gridConnection.transformerStation", label: "Trafostation", kind: ValueKind::Text },
-    PatchField { path: "energyConfiguration.gridConnection.substation", label: "Unterwerk", kind: ValueKind::Text },
-    PatchField { path: "energyConfiguration.gridConnection.networkOperator", label: "Netzbetreiber", kind: ValueKind::Text },
-    PatchField { path: "energyConfiguration.gridConnection.address.street", label: "Referenzadresse: Strasse", kind: ValueKind::Text },
-    PatchField { path: "energyConfiguration.gridConnection.address.houseNumber", label: "Referenzadresse: Hausnummer", kind: ValueKind::Text },
-    PatchField { path: "energyConfiguration.gridConnection.address.zipCode", label: "Referenzadresse: PLZ", kind: ValueKind::Text },
-    PatchField { path: "energyConfiguration.gridConnection.address.city", label: "Referenzadresse: Ort", kind: ValueKind::Text },
-    PatchField { path: "billingConfiguration.billingType", label: "Abrechnungsart", kind: ValueKind::Choice(BILLING_TYPE) },
-    PatchField { path: "billingConfiguration.pricingModel", label: "Preismodell", kind: ValueKind::Choice(PRICING_MODEL) },
-    PatchField { path: "billingConfiguration.individualFixedPrice", label: "Individueller Fixpreis", kind: ValueKind::Number },
-    PatchField { path: "billingConfiguration.standardTariffDiscount", label: "Rabatt Standardtarif", kind: ValueKind::Number },
-    PatchField { path: "billingConfiguration.bankAccount.iban", label: "IBAN", kind: ValueKind::Text },
-    PatchField { path: "billingConfiguration.bankAccount.accountHolder", label: "Kontoinhaber", kind: ValueKind::Text },
-    PatchField { path: "billingConfiguration.billingServiceProvider", label: "Abrechnungsdienstleister", kind: ValueKind::Text },
-    PatchField { path: "billingConfiguration.billingAddress.street", label: "Rechnungsadresse: Strasse", kind: ValueKind::Text },
-    PatchField { path: "billingConfiguration.billingAddress.houseNumber", label: "Rechnungsadresse: Hausnummer", kind: ValueKind::Text },
-    PatchField { path: "billingConfiguration.billingAddress.zipCode", label: "Rechnungsadresse: PLZ", kind: ValueKind::Text },
-    PatchField { path: "billingConfiguration.billingAddress.city", label: "Rechnungsadresse: Ort", kind: ValueKind::Text },
-    PatchField { path: "participation.allowedParticipants", label: "Erlaubte Teilnehmer", kind: ValueKind::Choice(PARTICIPANT_TYPE) },
-    PatchField { path: "ownership.founder.externalFounderId", label: "Gründer: Externe ID", kind: ValueKind::Text },
-    PatchField { path: "ownership.founder.contact.firstName", label: "Gründer: Vorname", kind: ValueKind::Text },
-    PatchField { path: "ownership.founder.contact.lastName", label: "Gründer: Nachname", kind: ValueKind::Text },
-    PatchField { path: "ownership.founder.contact.dateOfBirth", label: "Gründer: Geburtsdatum", kind: ValueKind::LocalDate },
-    PatchField { path: "ownership.founder.contact.email", label: "Gründer: E-Mail", kind: ValueKind::Text },
-    PatchField { path: "ownership.founder.contact.phone", label: "Gründer: Telefon", kind: ValueKind::Text },
-    PatchField { path: "ownership.founder.contact.companyName", label: "Gründer: Firma", kind: ValueKind::Text },
-    PatchField { path: "ownership.founder.contact.uidNumber", label: "Gründer: UID-Nummer", kind: ValueKind::Text },
-    PatchField { path: "ownership.founder.contact.businessPartnerNumber", label: "Gründer: Geschäftspartnernummer", kind: ValueKind::Text },
-    PatchField { path: "ownership.founder.contact.legalForm", label: "Gründer: Rechtsform", kind: ValueKind::Choice(LEGAL_FORM) },
-    PatchField { path: "ownership.founder.address.street", label: "Gründer: Strasse", kind: ValueKind::Text },
-    PatchField { path: "ownership.founder.address.houseNumber", label: "Gründer: Hausnummer", kind: ValueKind::Text },
-    PatchField { path: "ownership.founder.address.zipCode", label: "Gründer: PLZ", kind: ValueKind::Text },
-    PatchField { path: "ownership.founder.address.city", label: "Gründer: Ort", kind: ValueKind::Text },
-];
-
-static PATCH_FIELDS_PARTICIPATION: &[PatchField] = &[
-    PatchField { path: "externalParticipantId", label: "Externe Teilnehmer-ID", kind: ValueKind::Text },
-    PatchField { path: "participantType", label: "Art der Teilnahme", kind: ValueKind::Choice(PARTICIPANT_TYPE) },
-    PatchField { path: "participationState", label: "Status", kind: ValueKind::Choice(PART_STATE) },
-    PatchField { path: "startingDateAsap", label: "Start sobald wie möglich", kind: ValueKind::Bool },
-    PatchField { path: "startingDate", label: "Startdatum", kind: ValueKind::Date },
-    PatchField { path: "contact.firstName", label: "Vorname", kind: ValueKind::Text },
-    PatchField { path: "contact.lastName", label: "Nachname", kind: ValueKind::Text },
-    PatchField { path: "contact.dateOfBirth", label: "Geburtsdatum", kind: ValueKind::LocalDate },
-    PatchField { path: "contact.email", label: "E-Mail", kind: ValueKind::Text },
-    PatchField { path: "contact.phone", label: "Telefon", kind: ValueKind::Text },
-    PatchField { path: "contact.companyName", label: "Firma", kind: ValueKind::Text },
-    PatchField { path: "contact.uidNumber", label: "UID-Nummer", kind: ValueKind::Text },
-    PatchField { path: "contact.businessPartnerNumber", label: "Geschäftspartnernummer", kind: ValueKind::Text },
-    PatchField { path: "contact.legalForm", label: "Rechtsform", kind: ValueKind::Choice(LEGAL_FORM) },
-    PatchField { path: "address.street", label: "Strasse", kind: ValueKind::Text },
-    PatchField { path: "address.houseNumber", label: "Hausnummer", kind: ValueKind::Text },
-    PatchField { path: "address.zipCode", label: "PLZ", kind: ValueKind::Text },
-    PatchField { path: "address.city", label: "Ort", kind: ValueKind::Text },
-];
-
-/// Liefert die änderbaren Felder für eine "anpassen"-Aktion (sonst leer).
-fn patch_fields_for(path_suffix: &str) -> &'static [PatchField] {
-    match path_suffix {
-        "patchFounding" => PATCH_FIELDS_FOUNDING,
-        "patchParticipation" => PATCH_FIELDS_PARTICIPATION,
-        _ => &[],
-    }
-}
-
-fn find_patch_field(fields: &'static [PatchField], path: &str) -> Option<&'static PatchField> {
-    fields.iter().find(|f| f.path == path)
-}
-
-/// Standardwert beim Hinzufügen eines Felds (erster Auswahlwert bzw. leer).
-fn default_value_for(kind: ValueKind) -> String {
-    match kind {
-        ValueKind::Bool => "false".to_string(),
-        ValueKind::Choice(opts) => opts.first().map(|(v, _)| v.to_string()).unwrap_or_default(),
-        _ => String::new(),
-    }
-}
-
-/// Setzt einen Wert unter einem Punkt-Pfad in ein verschachteltes JSON-Objekt.
-fn insert_nested(root: &mut serde_json::Map<String, serde_json::Value>, path: &str, value: serde_json::Value) {
-    let parts: Vec<&str> = path.split('.').collect();
-    let mut cur = root;
-    for part in &parts[..parts.len() - 1] {
-        let entry = cur
-            .entry((*part).to_string())
-            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
-        if !entry.is_object() {
-            *entry = serde_json::Value::Object(serde_json::Map::new());
-        }
-        cur = entry.as_object_mut().unwrap();
-    }
-    cur.insert(parts[parts.len() - 1].to_string(), value);
-}
-
 // ----------------------------------------------------------------------------
 // Einstellungen (werden lokal gespeichert)
 // ----------------------------------------------------------------------------
@@ -779,11 +566,10 @@ struct ActionResult {
     message: String,
 }
 
-/// Inhalt der Anfrage: entweder klassische Formularfelder oder ein JSON-Text.
+/// Inhalt der Anfrage: klassische Formularfelder.
 #[derive(Clone, PartialEq)]
 enum RequestBody {
     Form(Vec<(String, String)>),
-    Json(String),
 }
 
 /// Vorbereitete Anfrage, die erst nach Bestätigung im Popup gesendet wird.
@@ -791,7 +577,6 @@ enum RequestBody {
 struct PendingRequest {
     url: String,
     key: String,
-    query: Vec<(String, String)>,
     body: RequestBody,
     action_title: String,
     env: Env,
@@ -833,8 +618,6 @@ fn App() -> Element {
     let mut show_settings = use_signal(|| false);
     let mut pending = use_signal(|| Option::<PendingRequest>::None);
     let mut confirm_checked = use_signal(|| false);
-    // Ausgewählte Änderungen für "anpassen"-Aktionen: (Pfad, Wert).
-    let mut patch_changes = use_signal(Vec::<(String, String)>::new);
     // Übersicht mit dem Ablauf-Diagramm ist die Einstiegsseite.
     let mut show_overview = use_signal(|| true);
     // Lösch-Aktionen: letzter erfolgreicher Probelauf (nur dann darf wirklich gelöscht werden),
@@ -854,7 +637,6 @@ fn App() -> Element {
     let mut select_action = move |i: usize| {
         selected.set(i);
         values.write().clear();
-        patch_changes.write().clear();
         result.set(None);
         dry_run.set(None);
         deleted.set(None);
@@ -867,7 +649,6 @@ fn App() -> Element {
     };
 
     let action = &ACTIONS[selected()];
-    let patch_fields = patch_fields_for(action.path_suffix);
     let is_delete = is_delete_action(action.path_suffix);
     let is_termination = is_termination_action(action.path_suffix);
 
@@ -984,121 +765,6 @@ fn App() -> Element {
                             }
                         }
 
-                        // -------- Feld-Auswahl für "anpassen"-Aktionen --------
-                        if !patch_fields.is_empty() {
-                            div { class: "field",
-                                label { "Zu ändernde Angaben" }
-                                div { class: "hint",
-                                    "Wählen Sie unten die Felder aus, die geändert werden sollen."
-                                }
-
-                                div { class: "patch-list",
-                                    for (idx , change) in patch_changes.read().iter().enumerate() {
-                                        if let Some(pf) = find_patch_field(patch_fields, &change.0) {
-                                            div { class: "patch-row",
-                                                div { class: "patch-row-label", "{pf.label}" }
-                                                div { class: "patch-row-value",
-                                                    match pf.kind {
-                                                        ValueKind::Bool => rsx! {
-                                                            select {
-                                                                value: "{change.1}",
-                                                                onchange: move |e| {
-                                                                    if let Some(c) = patch_changes.write().get_mut(idx) {
-                                                                        c.1 = e.value();
-                                                                    }
-                                                                },
-                                                                option { value: "true", "Ja" }
-                                                                option { value: "false", "Nein" }
-                                                            }
-                                                        },
-                                                        ValueKind::Choice(opts) => rsx! {
-                                                            select {
-                                                                value: "{change.1}",
-                                                                onchange: move |e| {
-                                                                    if let Some(c) = patch_changes.write().get_mut(idx) {
-                                                                        c.1 = e.value();
-                                                                    }
-                                                                },
-                                                                for (v , l) in opts.iter() {
-                                                                    option { value: "{v}", "{l}" }
-                                                                }
-                                                            }
-                                                        },
-                                                        ValueKind::Number => rsx! {
-                                                            input {
-                                                                r#type: "number",
-                                                                value: "{change.1}",
-                                                                oninput: move |e| {
-                                                                    if let Some(c) = patch_changes.write().get_mut(idx) {
-                                                                        c.1 = e.value();
-                                                                    }
-                                                                },
-                                                            }
-                                                        },
-                                                        ValueKind::Date | ValueKind::LocalDate => rsx! {
-                                                            input {
-                                                                r#type: "date",
-                                                                value: "{change.1}",
-                                                                oninput: move |e| {
-                                                                    if let Some(c) = patch_changes.write().get_mut(idx) {
-                                                                        c.1 = e.value();
-                                                                    }
-                                                                },
-                                                            }
-                                                        },
-                                                        ValueKind::Text => rsx! {
-                                                            input {
-                                                                r#type: "text",
-                                                                autocomplete: "off",
-                                                                value: "{change.1}",
-                                                                oninput: move |e| {
-                                                                    if let Some(c) = patch_changes.write().get_mut(idx) {
-                                                                        c.1 = e.value();
-                                                                    }
-                                                                },
-                                                            }
-                                                        },
-                                                    }
-                                                }
-                                                button {
-                                                    r#type: "button",
-                                                    class: "patch-remove",
-                                                    title: "Entfernen",
-                                                    onclick: move |_| {
-                                                        patch_changes.write().remove(idx);
-                                                    },
-                                                    "✕"
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                select {
-                                    class: "patch-add",
-                                    value: "",
-                                    onchange: move |e| {
-                                        let path = e.value();
-                                        if path.is_empty() {
-                                            return;
-                                        }
-                                        if let Some(pf) = find_patch_field(patch_fields, &path) {
-                                            let already = patch_changes.read().iter().any(|c| c.0 == path);
-                                            if !already {
-                                                patch_changes.write().push((path.clone(), default_value_for(pf.kind)));
-                                            }
-                                        }
-                                    },
-                                    option { value: "", "＋ Feld hinzufügen …" }
-                                    for pf in patch_fields.iter() {
-                                        if !patch_changes.read().iter().any(|c| c.0 == pf.path) {
-                                            option { value: "{pf.path}", "{pf.label}" }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
                         // -------- Schutz übersteuern (erst nach einer Schutzregel-Meldung) --------
                         if is_delete && (offer_force() || force()) {
                             label { class: "confirm-check force-check",
@@ -1159,9 +825,7 @@ fn App() -> Element {
                                     show_settings.set(true);
                                     return;
                                 }
-                                let is_patch = !patch_fields.is_empty();
                                 let vals = values.read();
-                                let mut query: Vec<(String, String)> = Vec::new();
                                 let mut form: Vec<(String, String)> = Vec::new();
                                 for f in action.fields.iter() {
                                     let v = vals.get(f.key).map(|s| s.trim().to_string()).unwrap_or_default();
@@ -1194,11 +858,7 @@ fn App() -> Element {
                                     if v.is_empty() {
                                         continue;
                                     }
-                                    if is_patch {
-                                        query.push((f.key.to_string(), v));
-                                    } else {
-                                        form.push((f.key.to_string(), v));
-                                    }
+                                    form.push((f.key.to_string(), v));
                                 }
                                 drop(vals);
                                 if is_delete {
@@ -1253,86 +913,7 @@ fn App() -> Element {
                                         form.push(("storageOnly".into(), "true".into()));
                                     }
                                 }
-                                let body = if is_patch {
-                                    let changes = patch_changes.read();
-                                    if changes.is_empty() {
-                                        result
-                                            .set(
-                                                Some(ActionResult {
-                                                    kind: ResultKind::Error,
-                                                    message: "Bitte mindestens ein zu änderndes Feld auswählen."
-                                                        .into(),
-                                                }),
-
-                                            );
-                                        return;
-                                    }
-                                    let mut root = serde_json::Map::new();
-                                    for (path, raw) in changes.iter() {
-                                        let Some(pf) = find_patch_field(patch_fields, path) else { continue };
-                                        let value = raw.trim();
-                                        let json_value = match pf.kind {
-                                            ValueKind::Bool => serde_json::Value::Bool(value == "true"),
-                                            ValueKind::Number => {
-                                                let normalized = value.replace(',', ".");
-                                                if let Ok(i) = normalized.parse::<i64>() {
-                                                    serde_json::json!(i)
-                                                } else if let Ok(n) = normalized.parse::<f64>() {
-                                                    serde_json::json!(n)
-                                                } else {
-                                                    result
-                                                        .set(
-                                                            Some(ActionResult {
-                                                                kind: ResultKind::Error,
-                                                                message: format!(
-                                                                    "Bei \"{}\" bitte eine gültige Zahl eingeben.",
-                                                                    pf.label,
-                                                                ),
-                                                            }),
-                                                        );
-                                                    return;
-                                                }
-                                            }
-                                            ValueKind::Date => {
-                                                if value.is_empty() {
-                                                    result
-                                                        .set(
-                                                            Some(ActionResult {
-                                                                kind: ResultKind::Error,
-                                                                message: format!(
-                                                                    "Bei \"{}\" bitte ein Datum wählen.",
-                                                                    pf.label,
-                                                                ),
-                                                            }),
-                                                        );
-                                                    return;
-                                                }
-                                                serde_json::Value::String(format!("{value}T00:00:00Z"))
-                                            }
-                                            _ => {
-                                                if value.is_empty() {
-                                                    result
-                                                        .set(
-                                                            Some(ActionResult {
-                                                                kind: ResultKind::Error,
-                                                                message: format!(
-                                                                    "Bei \"{}\" bitte einen Wert angeben.",
-                                                                    pf.label,
-                                                                ),
-                                                            }),
-                                                        );
-                                                    return;
-                                                }
-                                                serde_json::Value::String(value.to_string())
-                                            }
-                                        };
-                                        insert_nested(&mut root, path, json_value);
-                                    }
-                                    drop(changes);
-                                    RequestBody::Json(serde_json::Value::Object(root).to_string())
-                                } else {
-                                    RequestBody::Form(form)
-                                };
+                                let body = RequestBody::Form(form);
                                 let url = format!(
                                     "{}/bin/com/ajila/forms/industry/leg/{}",
                                     current.env.base_url(),
@@ -1343,7 +924,6 @@ fn App() -> Element {
                                 let req = PendingRequest {
                                     url,
                                     key,
-                                    query,
                                     body,
                                     action_title: action.title.to_string(),
                                     env: current.env,
@@ -1406,9 +986,8 @@ fn App() -> Element {
                                         if let Some(dr) = dry_run() {
                                             // Genau den geprüften Request verwenden, nicht die aktuellen Felder.
                                             let mut req = dr.request;
-                                            if let RequestBody::Form(form) = &mut req.body {
-                                                form.push(("dryRun".into(), "false".into()));
-                                            }
+                                            let RequestBody::Form(form) = &mut req.body;
+                                            form.push(("dryRun".into(), "false".into()));
                                             req.deletion = Some(dr.summary);
                                             confirm_checked.set(false);
                                             pending.set(Some(req));
@@ -1674,7 +1253,7 @@ fn App() -> Element {
                                                 let outcome = send_termination_request(&req).await;
                                                 apply_termination_outcome(outcome, req, result, terminated, retry_request, copied);
                                             } else {
-                                                let outcome = send_request(req.url, req.key, req.query, req.body).await;
+                                                let outcome = send_request(req.url, req.key, req.body).await;
                                                 result.set(Some(outcome));
                                             }
                                             sending.set(false);
@@ -1698,26 +1277,10 @@ fn App() -> Element {
 }
 
 /// Führt die Anfrage aus und liefert eine verständliche Rückmeldung.
-async fn send_request(
-    url: String,
-    key: String,
-    query: Vec<(String, String)>,
-    body: RequestBody,
-) -> ActionResult {
+async fn send_request(url: String, key: String, body: RequestBody) -> ActionResult {
     let client = reqwest::Client::new();
-    // Die "anpassen"-Endpunkte (JSON-Body) erwarten HTTP PATCH, alle anderen POST.
-    let mut builder = match &body {
-        RequestBody::Form(_) => client.post(&url),
-        RequestBody::Json(_) => client.patch(&url),
-    };
-    builder = builder.header("X-Api-Key", key);
-    if !query.is_empty() {
-        builder = builder.query(&query);
-    }
-    builder = match body {
-        RequestBody::Form(form) => builder.form(&form),
-        RequestBody::Json(text) => builder.header("Content-Type", "application/json").body(text),
-    };
+    let RequestBody::Form(form) = body;
+    let builder = client.post(&url).header("X-Api-Key", key).form(&form);
     match builder.send().await {
         Ok(resp) => {
             let status = resp.status();
@@ -1755,9 +1318,7 @@ fn network_error() -> ActionResult {
 /// Sendet einen Lösch-Aufruf (Probelauf oder echt) und wertet die JSON-Antwort aus.
 async fn send_delete_request(req: &PendingRequest) -> DeleteOutcome {
     let failed = |result| DeleteOutcome::Failed { result, can_force: false };
-    let RequestBody::Form(form) = &req.body else {
-        return failed(generic_error());
-    };
+    let RequestBody::Form(form) = &req.body;
     let resp = match reqwest::Client::new()
         .post(&req.url)
         .header("X-Api-Key", &req.key)
@@ -1839,9 +1400,8 @@ fn apply_delete_outcome(
         DeleteOutcome::Summary(summary) if summary.dry_run => {
             // Der gespeicherte Request ist immer der Probelauf ohne dryRun-Parameter.
             let mut request = request;
-            if let RequestBody::Form(form) = &mut request.body {
-                form.retain(|(k, _)| k != "dryRun");
-            }
+            let RequestBody::Form(form) = &mut request.body;
+            form.retain(|(k, _)| k != "dryRun");
             request.deletion = None;
             dry_run.set(Some(DryRun { request, summary }));
         }
@@ -1899,9 +1459,8 @@ fn retry_for(request: &PendingRequest, report: &TerminationReport) -> PendingReq
         .filter(|r| r.retryable())
         .filter_map(|r| r.measuring_point.clone())
         .collect();
-    if let RequestBody::Form(form) = &mut retry.body {
-        form.retain(|(k, v)| k != "measuringPointNumber" || keep.contains(v));
-    }
+    let RequestBody::Form(form) = &mut retry.body;
+    form.retain(|(k, v)| k != "measuringPointNumber" || keep.contains(v));
     info.measuring_points = keep;
     retry
 }
