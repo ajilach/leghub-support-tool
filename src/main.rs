@@ -12,9 +12,11 @@ use dioxus::prelude::*;
 use serde::{Deserialize, Serialize};
 
 mod flows;
+mod measuring_point;
 mod termination;
 
 use flows::Overview;
+use measuring_point::{is_change_number_action, normalize_change_number, send_change_number_request, CHANGE_NUMBER_PATH};
 use termination::{
     is_date_field, is_termination_action, parse_iso_date, send_termination_request, swiss_date, termination_guide_view,
     TerminationInfo, TerminationOutcome, TerminationReport, TerminationReportView,
@@ -160,6 +162,17 @@ static ACTIONS: &[Action] = &[
         ],
     },
     Action {
+        group: "Messpunkte",
+        title: "Messpunktnummer ändern",
+        description: "Korrigiert die Nummer eines offenen Messpunkts – nur in LEGhub, der Netzbetreiber wird nicht informiert. Ausgetretene Messpunkte bleiben unverändert.",
+        path_suffix: CHANGE_NUMBER_PATH,
+        fields: &[
+            Field { key: "legId", label: "Gründungs-ID", hint: "Interne LEG-ID wie im Dashboard (im Link «leg-detail?legId=…»)", required: true },
+            Field { key: "measuringPointNumber", label: "Bisherige Messpunktnummer", hint: "Die heute gespeicherte (falsche) Nummer, z. B. «CH1015001234500010060400007001001». Gross-/Kleinschreibung spielt keine Rolle.", required: true },
+            Field { key: "newMeasuringPointNumber", label: "Neue Messpunktnummer", hint: "Die korrekte Nummer: «CH» und 31 weitere Zeichen.", required: true },
+        ],
+    },
+    Action {
         group: "Unterschriften",
         title: "Unterschrift als abgeschlossen markieren",
         description: "Behandelt eine Unterschrift so, als wäre sie fertig unterzeichnet worden.",
@@ -228,7 +241,7 @@ static ACTIONS: &[Action] = &[
 ];
 
 /// Reihenfolge der Gruppen im Seitenpanel.
-static GROUPS: &[&str] = &["Gründungen", "Teilnahmen", "Unterschriften", "Austritt & Auflösung", "Löschen"];
+static GROUPS: &[&str] = &["Gründungen", "Teilnahmen", "Messpunkte", "Unterschriften", "Austritt & Auflösung", "Löschen"];
 
 // ----------------------------------------------------------------------------
 // Lösch-Aktionen (immer zuerst als Probelauf)
@@ -240,8 +253,9 @@ fn is_delete_action(path_suffix: &str) -> bool {
 }
 
 /// Felder, in die mehrere Werte eingetragen werden können (je Wert ein eigener Parameter).
-fn is_multi_value(key: &str) -> bool {
-    key == "measuringPointNumber"
+/// «Messpunktnummer ändern» nimmt genau eine Nummer.
+fn is_multi_value(path_suffix: &str, key: &str) -> bool {
+    key == "measuringPointNumber" && !is_change_number_action(path_suffix)
 }
 
 /// Teilt eine Eingabe mit mehreren Werten an Komma, Semikolon, Leerzeichen und Zeilenumbruch auf.
@@ -794,6 +808,7 @@ struct PendingRequest {
     query: Vec<(String, String)>,
     body: RequestBody,
     action_title: String,
+    path_suffix: &'static str,
     env: Env,
     /// Bei einer echten Löschung: die Zusammenfassung aus dem vorangegangenen Probelauf.
     deletion: Option<DeletionSummary>,
@@ -945,7 +960,7 @@ fn App() -> Element {
                                         span { class: "optional", " (optional)" }
                                     }
                                 }
-                                if is_multi_value(field.key) {
+                                if is_multi_value(action.path_suffix, field.key) {
                                     textarea {
                                         rows: "3",
                                         placeholder: "CH1015001234500010060400007001001\nCH1015001234500010060400007001002",
@@ -1165,7 +1180,7 @@ fn App() -> Element {
                                 let mut form: Vec<(String, String)> = Vec::new();
                                 for f in action.fields.iter() {
                                     let v = vals.get(f.key).map(|s| s.trim().to_string()).unwrap_or_default();
-                                    if is_multi_value(f.key) {
+                                    if is_multi_value(action.path_suffix, f.key) {
                                         let entries = split_multi_value(&v);
                                         if f.required && entries.is_empty() {
                                             result
@@ -1251,6 +1266,12 @@ fn App() -> Element {
                                     });
                                     if storage_only() {
                                         form.push(("storageOnly".into(), "true".into()));
+                                    }
+                                }
+                                if is_change_number_action(action.path_suffix) {
+                                    if let Err(message) = normalize_change_number(&mut form) {
+                                        result.set(Some(error(message)));
+                                        return;
                                     }
                                 }
                                 let body = if is_patch {
@@ -1346,6 +1367,7 @@ fn App() -> Element {
                                     query,
                                     body,
                                     action_title: action.title.to_string(),
+                                    path_suffix: action.path_suffix,
                                     env: current.env,
                                     deletion: None,
                                     termination,
@@ -1673,6 +1695,8 @@ fn App() -> Element {
                                             } else if req.termination.is_some() {
                                                 let outcome = send_termination_request(&req).await;
                                                 apply_termination_outcome(outcome, req, result, terminated, retry_request, copied);
+                                            } else if is_change_number_action(req.path_suffix) {
+                                                result.set(Some(send_change_number_request(&req).await));
                                             } else {
                                                 let outcome = send_request(req.url, req.key, req.query, req.body).await;
                                                 result.set(Some(outcome));
