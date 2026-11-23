@@ -20,21 +20,6 @@ Ein kleines Programm, mit dem Support-Aufgaben für LegHub-Gründungen und
 
 > **Achtung:** In der Umgebung **Produktion** wirken die Aktionen sofort auf echte Daten.
 
-### Messpunkte
-
-**Messpunktnummer ändern** korrigiert die Nummer eines offenen Messpunkts einer LEG, z. B. nach einem
-Tippfehler bei der Erfassung.
-
-- Geändert wird **nur LEGhub**. Der Netzbetreiber wird nicht informiert.
-- Nur der offene Messpunkt (ohne Enddatum) wird geändert. Ausgetretene Messpunkte bleiben als Historie
-  unverändert.
-- Ist die Nummer in der LEG als Bezugs- **und** Einspeisemesspunkt erfasst, werden beide geändert.
-- Abgelehnt wird eine ungültige neue Nummer, ein Messpunkt, der in dieser LEG nicht offen ist, oder eine
-  neue Nummer, die bereits einem aktiven Messpunkt gehört. Die bisherige Nummer darf auch falsch formatiert
-  sein, damit sich Erfassungsfehler korrigieren lassen.
-- Da der Netzbetreiber nicht informiert wird, kennt er weiterhin die alte Nummer. Spätere Meldungen an ihn
-  (z. B. ein Austritt) laufen mit der neuen Nummer – den Netzbetreiber deshalb separat informieren.
-
 ### Austritt & Auflösung
 
 **LEG auflösen** und **Messpunkte austreten lassen** lösen denselben Ablauf aus wie das Dashboard
